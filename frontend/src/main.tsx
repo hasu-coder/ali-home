@@ -13,7 +13,14 @@ type Room = { key: string; name: string; floor: string; has_voice_point: boolean
 type Pet = { key: string; name: string; species: string; home_state: string; last_known_room?: string | null };
 type ActivityItem = { id: number; event_type: string; summary: string; actor?: string; level: number; created_at: string };
 type Usage = { daily_spend: number; monthly_spend: number; daily_limit: number; monthly_limit: number; enabled: boolean; monthly_by_model?: Record<string, number> };
-type VoiceStatus = { transcription_available: boolean; tts_available: boolean; max_seconds: number; transcription_model: string };
+type VoiceStatus = {
+  transcription_available: boolean;
+  local_transcription_available?: boolean;
+  speaker_identification_available?: boolean;
+  tts_available: boolean;
+  max_seconds: number;
+  transcription_model: string;
+};
 type SpeechStyle = "normal" | "soft" | "whisper";
 type Status = {
   status: string;
@@ -27,11 +34,17 @@ type AssistantResult = {
   used_remote_llm: boolean;
   estimated_cost: number;
   speech_style?: SpeechStyle;
+  probable_user?: string | null;
+  live_context_used?: boolean;
 };
 type VoiceTurnResult = AssistantResult & {
   transcript: string;
   transcription_model: string;
+  transcription_source?: string;
   transcription_estimated_cost: number;
+  speaker?: string | null;
+  speaker_confidence?: number;
+  speaker_identified?: boolean;
 };
 type SpeechRecognitionLike = {
   lang: string;
@@ -101,6 +114,8 @@ function App() {
   const selected = rooms.find((room) => room.key === selectedRoom);
   const voiceRooms = useMemo(() => rooms.filter((room) => room.has_voice_point), [rooms]);
   const apiTranscriptionAvailable = Boolean(status?.voice?.transcription_available);
+  const localTranscriptionAvailable = Boolean(status?.voice?.local_transcription_available);
+  const speakerIdentificationAvailable = Boolean(status?.voice?.speaker_identification_available);
   const apiTtsAvailable = Boolean(status?.voice?.tts_available);
 
   function usd(value: number | undefined) {
@@ -166,9 +181,7 @@ function App() {
     setLatency(elapsed);
     setReply(result.response);
     setLastSpeechStyle(style);
-    setVoiceNotice(`ALI respondió por ${source} en ${elapsed} ms · ${style === "whisper" ? "modo susurro" : style === "soft" ? "modo suave" : result.used_remote_llm ? "modelo remoto" : "modo local"}`);
-    // ALI should be heard whether the turn started by text or voice. Browser
-    // speech is the free fallback; premium TTS remains opt-in in the backend.
+    setVoiceNotice(`ALI respondió por ${source} en ${elapsed} ms · ${style === "whisper" ? "modo susurro" : style === "soft" ? "modo suave" : result.live_context_used ? "datos en vivo" : result.used_remote_llm ? "modelo remoto" : "modo local"}`);
     void speakReply(result.response, style);
     refresh().catch(console.error);
   }
@@ -194,7 +207,7 @@ function App() {
   function startBrowserVoice(): boolean {
     const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!Recognition) {
-      setVoiceNotice("Este navegador no ofrece reconocimiento de voz. Necesito la transcripción de respaldo.");
+      setVoiceNotice("Este navegador no ofrece reconocimiento de voz.");
       return false;
     }
     const instance = new Recognition();
@@ -205,7 +218,7 @@ function App() {
     instance.onresult = (event) => {
       const text = event.results[0][0].transcript;
       setInput(text);
-      setVoiceNotice(`Reconocido: “${text}”`);
+      setVoiceNotice(`Reconocido por navegador: “${text}”`);
       void askAli(text);
     };
     instance.onerror = () => setVoiceNotice("No he podido oírte. Revisa el permiso de micrófono.");
@@ -213,7 +226,7 @@ function App() {
     try {
       instance.start();
       setIsListening(true);
-      setVoiceNotice("Escuchando sin consumir créditos de OpenAI…");
+      setVoiceNotice("Escuchando con el reconocimiento del navegador…");
       return true;
     } catch (error) {
       console.error(error);
@@ -224,21 +237,25 @@ function App() {
 
   async function sendVoiceRecording(audio: Blob, durationSeconds: number) {
     setIsVoiceProcessing(true);
-    setVoiceNotice("Transcribiendo de forma segura…");
+    setVoiceNotice(localTranscriptionAvailable ? "Transcribiendo localmente · 0 $ de STT…" : "Transcribiendo…");
     const form = new FormData();
     form.append("file", audio, "ali-voice.webm");
     if (conversationId) form.append("conversation_id", conversationId);
-    form.append("probable_user", probableUser);
+    // Deliberately do not send the manual user selector for voice. The backend
+    // identifies Laura/Ismael from the local voiceprint when enrolled.
     form.append("room_key", selectedRoom || "cocina_salon");
     form.append("duration_seconds", durationSeconds.toFixed(2));
     const start = performance.now();
     try {
       const result = await apiPostForm<VoiceTurnResult>("/api/voice/turn", form);
       setInput(result.transcript);
+      if (result.speaker_identified && result.speaker) {
+        setVoiceNotice(`He reconocido a ${result.speaker} · ${Math.round((result.speaker_confidence || 0) * 100)}%`);
+      }
       showReply(result, Math.round(performance.now() - start), "voz");
     } catch (error) {
       console.error(error);
-      setVoiceNotice("No he podido transcribir esta frase. Prueba de nuevo o usa el modo de navegador.");
+      setVoiceNotice("No he podido transcribir esta frase. Revisa el motor de voz local.");
     } finally {
       setIsVoiceProcessing(false);
       setIsListening(false);
@@ -289,22 +306,25 @@ function App() {
     const maxSeconds = status?.voice?.max_seconds || 8;
     recordingTimeout.current = window.setTimeout(() => {
       if (instance.state !== "inactive") {
-        setVoiceNotice("He cerrado la escucha para ahorrar datos. Dime una frase corta y vuelve a hablarme.");
+        setVoiceNotice("He cerrado la escucha. Dime una frase corta y vuelve a hablarme.");
         instance.stop();
       }
     }, maxSeconds * 1000);
-    setVoiceNotice(`Te escucho · máximo ${maxSeconds} segundos`);
+    setVoiceNotice(localTranscriptionAvailable ? "Te escucho · después transcribo en local" : `Te escucho · máximo ${maxSeconds} segundos`);
   }
 
   function startVoice() {
     if (isListening || isVoiceProcessing) return;
-    if (startBrowserVoice()) return;
+    // Prefer ALI's own backend when local STT exists: this is the path that also
+    // performs automatic speaker identification. Browser recognition is fallback.
     if (apiTranscriptionAvailable) {
       startApiVoice().catch((error) => {
         console.error(error);
-        setVoiceNotice("No he podido abrir el micrófono de respaldo. Prueba Chrome o Safari.");
+        if (!startBrowserVoice()) setVoiceNotice("No he podido abrir ningún modo de escucha.");
       });
+      return;
     }
+    startBrowserVoice();
   }
 
   function stopVoice() {
@@ -324,14 +344,14 @@ function App() {
   return <main className="ali-shell">
     <div className="scanlines" />
     <header className="hud-header">
-      <div className="brand"><span className="brand-orb"><Sparkles size={22} /></span><div><p>ALI HOME / CORE v0.3</p><h1>ALI <em>HOME</em></h1></div></div>
-      <div className="header-status"><span className={status?.status === "ok" ? "pulse-dot online" : "pulse-dot"} /> SISTEMA {status?.status === "ok" ? "OPERATIVO" : "CONECTANDO"}<small>LOCAL-FIRST · VOZ SIN CUOTA OBLIGATORIA</small></div>
+      <div className="brand"><span className="brand-orb"><Sparkles size={22} /></span><div><p>ALI HOME / CORE v0.4</p><h1>ALI <em>HOME</em></h1></div></div>
+      <div className="header-status"><span className={status?.status === "ok" ? "pulse-dot online" : "pulse-dot"} /> SISTEMA {status?.status === "ok" ? "OPERATIVO" : "CONECTANDO"}<small>LOCAL-FIRST · STT LOCAL · IDENTIDAD POR VOZ</small></div>
     </header>
 
     <section className="command-deck panel-glow">
       <div className="voice-core">
         <div className={`voice-ring ${isListening || isVoiceProcessing ? "listening" : ""}`}><Mic size={34} /></div>
-        <div><span className="eyebrow">INTERFAZ DE VOZ</span><h2>{isVoiceProcessing ? "PROCESANDO" : isListening ? "TE ESCUCHO" : "HABLA CON ALI"}</h2><p>{voiceNotice}</p><span className="voice-identity">VOZ FIJA · ALI</span></div>
+        <div><span className="eyebrow">INTERFAZ DE VOZ</span><h2>{isVoiceProcessing ? "PROCESANDO" : isListening ? "TE ESCUCHO" : "HABLA CON ALI"}</h2><p>{voiceNotice}</p><span className="voice-identity">{localTranscriptionAvailable ? "STT LOCAL · 0 $" : "STT DE RESPALDO"} · {speakerIdentificationAvailable ? "RECONOCIMIENTO AUTOMÁTICO" : "VOZ SIN PERFIL"}</span></div>
         <button
           className="talk-button"
           disabled={isVoiceProcessing}
@@ -361,8 +381,8 @@ function App() {
         </button>
       </div>
       <div className="text-command">
-        <select className="user-picker" value={probableUser} onChange={(event) => setProbableUser(event.target.value)} aria-label="Persona que habla">
-          {users.length ? users.map((user) => <option key={user.username} value={user.username}>{user.display_name}</option>) : <><option value="ismael">Ismael</option><option value="laura">Laura</option></>}
+        <select className="user-picker" value={probableUser} onChange={(event) => setProbableUser(event.target.value)} aria-label="Persona para prueba escrita" title="Solo afecta a las pruebas escritas; por voz ALI intenta reconocerte automáticamente">
+          {users.length ? users.map((user) => <option key={user.username} value={user.username}>{user.display_name} · texto</option>) : <><option value="ismael">Ismael · texto</option><option value="laura">Laura · texto</option></>}
         </select>
         <input value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => event.key === "Enter" && void askAli()} />
         <button onClick={() => void askAli()}>ENVIAR <ChevronRight size={17} /></button>
@@ -373,13 +393,13 @@ function App() {
     <section className="overview-grid">
       <article className="telemetry panel-glow"><span className="eyebrow">ESTADO AMBIENTAL</span><div className="temp-value"><Thermometer /> <strong>—<sup>°C</sup></strong></div><p>Sin sensor térmico conectado</p><div className="telemetry-row"><Wind size={16} /> Aire acondicionado <b>Sin integrar</b></div><div className="telemetry-row"><CloudSun size={16} /> Clima exterior <b>Pendiente</b></div></article>
       <article className="telemetry panel-glow"><span className="eyebrow">SEGURIDAD PERIMETRAL</span><div className="security-number"><ShieldCheck size={30} /><strong>—</strong></div><p>Puertas y ventanas sin sensores</p><div className="telemetry-row"><DoorOpen size={16} /> Puertas <b>Sin datos</b></div><div className="telemetry-row"><BellRing size={16} /> Alertas <b>0</b></div></article>
-      <article className="telemetry panel-glow"><span className="eyebrow">INTELIGENCIA ALI</span><div className="security-number"><BrainCircuit size={30} /><strong>ALI</strong></div><p>{users.map((user) => user.display_name).join(" · ") || "Perfiles cargando"}</p><div className="telemetry-row"><Radio size={16} /> Voz <b>{apiTtsAvailable ? "ALI natural en conversación" : voiceRooms.length ? "Punto previsto" : "Voz del navegador"}</b></div><div className="telemetry-row"><Gauge size={16} /> Coste estimado hoy <b>{usd(usage?.daily_spend)}</b></div><div className="telemetry-row"><Gauge size={16} /> Tope mensual <b>{usd(usage?.monthly_limit)}</b></div></article>
+      <article className="telemetry panel-glow"><span className="eyebrow">INTELIGENCIA ALI</span><div className="security-number"><BrainCircuit size={30} /><strong>ALI</strong></div><p>{users.map((user) => user.display_name).join(" · ") || "Perfiles cargando"}</p><div className="telemetry-row"><Radio size={16} /> Voz <b>{localTranscriptionAvailable ? "Transcripción local" : apiTtsAvailable ? "ALI natural" : voiceRooms.length ? "Punto previsto" : "Voz del navegador"}</b></div><div className="telemetry-row"><Gauge size={16} /> Coste estimado hoy <b>{usd(usage?.daily_spend)}</b></div><div className="telemetry-row"><Gauge size={16} /> Tope mensual <b>{usd(usage?.monthly_limit)}</b></div></article>
     </section>
 
     <section className="home-grid">
       <article className="house-panel panel-glow"><div className="section-heading"><div><span className="eyebrow">VISTA SATÉLITE · PLANO ESQUEMÁTICO</span><h2>CASA <em>EN VIVO</em></h2></div><span className="house-live"><span className="pulse-dot online" /> {status?.home_assistant?.reachable ? "SENSORES EN LÍNEA" : "SIN SENSORES CONECTADOS"}</span></div>
         <div className="house-map">{rooms.map((room) => { const pos = roomPositions[room.key] || { x: 8, y: 8, w: 25, h: 20 }; return <button key={room.key} className={`map-room ${selectedRoom === room.key ? "selected" : ""}`} style={{ left: `${pos.x}%`, top: `${pos.y}%`, width: `${pos.w}%`, height: `${pos.h}%` }} onClick={() => setSelectedRoom(room.key)}><span>{room.name}</span><small>{room.has_voice_point ? "◉ VOZ" : "○ SIN VOZ"}</small></button>; })}<div className="map-radar" /></div>
-        <div className="map-legend"><span><Lightbulb size={14} /> Iluminación: pendiente</span><span><AirVent size={14} /> Clima: pendiente</span><span><Mic size={14} /> Micrófono: navegador / futuro punto ALI</span></div>
+        <div className="map-legend"><span><Lightbulb size={14} /> Iluminación: pendiente</span><span><AirVent size={14} /> Clima: pendiente</span><span><Mic size={14} /> Micrófono: STT local + voz identificada</span></div>
       </article>
 
       <aside className="room-console panel-glow"><span className="eyebrow">CONSOLA DE ESTANCIA</span>{selected ? <><h2>{selected.name}</h2><p>{selected.floor} · {selected.has_voice_point ? "Punto de voz previsto" : "Sin punto de voz"}</p><div className="control-state"><Lightbulb /> Iluminación <b>Sin conectar</b></div><div className="control-state"><AirVent /> Aire acondicionado <b>Sin conectar</b></div><div className="control-state"><DoorOpen /> Puertas / ventanas <b>Sin sensor</b></div><div className="action-buttons"><button onClick={() => commandFor(selected, "enciende")}>ENCENDER</button><button onClick={() => commandFor(selected, "apaga")}>APAGAR</button></div></> : <div className="select-room"><HomeGlyph /><p>Selecciona una estancia en el plano para ver sus controles.</p></div>}<div className="pet-card"><Cat size={18} /><div><span>{pets[0]?.name || "CAT"}</span><b>{pets[0]?.home_state || "Sin datos"}</b></div></div></aside>
