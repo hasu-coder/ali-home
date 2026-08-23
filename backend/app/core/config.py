@@ -11,6 +11,9 @@ class Settings(BaseSettings):
     ali_log_level: str = "INFO"
     ali_database_url: str = "sqlite:///./data/ali.db"
     ali_cors_origins: str = "http://localhost:5173,http://localhost:3000"
+    ali_timezone: str = "Europe/Madrid"
+    ali_quiet_hours_start: int = Field(default=23, ge=0, le=23)
+    ali_quiet_hours_end: int = Field(default=7, ge=0, le=23)
 
     home_assistant_url: str = "http://homeassistant.local:8123"
     home_assistant_token: str = ""
