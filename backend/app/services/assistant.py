@@ -224,8 +224,11 @@ async def run_assistant_turn(
             used_remote = llm_response.used_remote_model
             cost = llm_response.estimated_cost
             model = llm_response.model
-        except BudgetExceededError as exc:
-            response_text = f"Estoy en modo local: {exc}."
+        except BudgetExceededError:
+            response_text = (
+                "He alcanzado el límite temporal de conversaciones online. "
+                "Las órdenes de casa y la memoria local siguen disponibles sin coste."
+            )
             model = settings.openai_model
         except LLMProviderError:
             if current_info_needed:
