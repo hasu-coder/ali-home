@@ -83,7 +83,7 @@ def test_local_ask_does_not_use_remote_llm_for_known_light_intent(monkeypatch):
     assert response.status_code == 200
     body = response.json()
     assert body["used_remote_llm"] is False
-    assert body["response"] == "Listo."
+    assert body["response"] == "Vale, enciendo la cocina."
     assert body["intent"]["intent"] == "set_room_lighting"
     assert body["execution"]["success"] is True
     assert FakeHomeAssistantClient.calls[0]["entity_id"] == "light.cocina_salon"
@@ -96,6 +96,9 @@ def test_local_router_keeps_known_home_commands_off_openai():
         "modo noche",
         "nos vamos",
         "qué temperatura hace",
+        "baja las persianas",
+        "enciende el aire acondicionado",
+        "pon el aire a 22 grados",
     ]
     assert all(needs_remote_llm(text) is False for text in known_local)
 
@@ -103,6 +106,35 @@ def test_local_router_keeps_known_home_commands_off_openai():
 def test_short_natural_language_requests_can_use_ali():
     assert needs_remote_llm("¿Qué puedes hacer?") is True
     assert needs_remote_llm("hola") is True
+    assert needs_remote_llm("¿Qué puedo cocinar esta noche?") is True
+
+
+def test_unconfigured_blinds_stay_local_and_do_not_claim_success():
+    response = client.post("/api/ask", json={"text": "ALI, baja las persianas", "probable_user": "ismael"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["used_remote_llm"] is False
+    assert body["execution"] is None
+    assert body["response"] == "Aún no tengo las persianas enlazadas a Home Assistant."
+
+
+def test_configured_air_uses_local_home_assistant_intent(monkeypatch):
+    settings = get_settings()
+    original_entity_id = settings.home_assistant_climate_entity_id
+    FakeHomeAssistantClient.calls = []
+    FakeHomeAssistantClient.result = FakeHAResult(success=True, verified=False, state=None)
+    settings.home_assistant_climate_entity_id = "climate.salon"
+    monkeypatch.setattr("app.api.routes.HomeAssistantClient", FakeHomeAssistantClient)
+    try:
+        response = client.post("/api/ask", json={"text": "ALI, pon el aire a 22 grados", "probable_user": "ismael"})
+        assert response.status_code == 200
+        body = response.json()
+        assert body["used_remote_llm"] is False
+        assert body["response"] == "Vale, dejo el aire a 22 grados."
+        assert FakeHomeAssistantClient.calls[0]["entity_id"] == "climate.salon"
+        assert FakeHomeAssistantClient.calls[0]["service_data"] == {"temperature": 22}
+    finally:
+        settings.home_assistant_climate_entity_id = original_entity_id
 
 
 def test_ali_removes_canned_closing_questions():
@@ -274,7 +306,7 @@ def test_openai_budget_limit_keeps_local_home_control_working(monkeypatch):
         assert remote.status_code == 200
         assert "modo local" in remote.json()["response"]
         assert local.status_code == 200
-        assert local.json()["response"] == "Listo."
+        assert local.json()["response"] == "Vale, enciendo la cocina."
         assert local.json()["used_remote_llm"] is False
     finally:
         settings.openai_enabled = original_enabled
@@ -470,7 +502,7 @@ def test_voice_turn_uses_the_same_local_command_path_and_withholds_transcript(mo
         assert response.status_code == 200
         body = response.json()
         assert body["transcript"] == "ALI, enciende la cocina"
-        assert body["response"] == "Listo."
+        assert body["response"] == "Vale, enciendo la cocina."
         assert body["used_remote_llm"] is False
         assert body["transcription_estimated_cost"] == 0.001
         assert FakeHomeAssistantClient.calls[0]["entity_id"] == "light.cocina_salon"
