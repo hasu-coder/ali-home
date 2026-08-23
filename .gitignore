@@ -1,0 +1,16 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+node_modules/
+.npm-cache/
+dist/
+build/
+data/
+*.db
+*.sqlite
+*.zip
+*.tar.gz
+.DS_Store
