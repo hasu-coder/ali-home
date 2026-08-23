@@ -17,6 +17,16 @@ cp .env.example .env
 
 Edit `.env` and set only the services you want to enable.
 
+For low-cost voice, add a server-side OpenAI key and enable only these settings:
+
+```env
+OPENAI_VOICE_ENABLED=true
+OPENAI_ENABLED=false
+OPENAI_TTS_ENABLED=false
+```
+
+The frontend records a short utterance and sends it to ALI's backend; the browser never receives the API key. ALI answers out loud using the browser voice for free. OpenAI text reasoning and OpenAI TTS are separate, opt-in switches and share the same local budget limits.
+
 ```bash
 docker compose up --build -d
 ```
