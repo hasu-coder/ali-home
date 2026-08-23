@@ -78,7 +78,11 @@
         const response = await fetch('/api/voice/enroll', { method: 'POST', body: form });
         const body = await response.json().catch(() => ({}));
         if (!response.ok) {
-          throw new Error(body.detail || `HTTP ${response.status}`);
+          const detail = body.detail || `HTTP ${response.status}`;
+          if (String(detail).startsWith('voice_enrollment_unavailable:')) {
+            throw new Error(`El motor local de voz no está listo. Actualiza y reconstruye el backend. Detalle: ${detail}`);
+          }
+          throw new Error(detail);
         }
         line(`✓ Muestra ${i + 1} añadida · total guardado: ${body.sample_count}`);
       }
