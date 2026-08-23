@@ -5,10 +5,10 @@ SPORTS = re.compile(
     r"\b(bar[cç]a|barsa|barcelona|real madrid|madrid|atl[eé]tico|f[uú]tbol|futbol|liga|champions|partido|marcador|gol|goles)\b",
     re.IGNORECASE,
 )
-SPORTS_LIVE_REQUEST = re.compile(
-    r"\b(c[oó]mo van|cu[aá]nto van|qu[ií]en va ganando|resultado|marcador|"
-    r"en qu[eé] minuto|a qu[eé] hora juega|cu[aá]ndo juega|d[oó]nde (?:lo )?ponen|"
-    r"ha ganado|han ganado|van ganando|van perdiendo)\b",
+SPORTS_LIVE_CONTEXT = re.compile(
+    r"\b(estoy viendo|estamos viendo|viendo el|c[oó]mo van|cu[aá]nto van|"
+    r"qu[ií]en va ganando|resultado|marcador|en qu[eé] minuto|a qu[eé] hora juega|"
+    r"cu[aá]ndo juega|d[oó]nde (?:lo )?ponen|ha ganado|han ganado|van ganando|van perdiendo)\b",
     re.IGNORECASE,
 )
 WEATHER = re.compile(
@@ -36,15 +36,15 @@ CURRENT_TIME_HINT = re.compile(
 def needs_live_context(text: str) -> bool:
     """Return True only when answering well reasonably requires fresh public data.
 
-    Casual observations stay conversational. ALI only searches sport results
-    when the person explicitly asks for the score, status, schedule or broadcast.
+    Sport-related observations still need a quick reality check: ALI must know
+    whether a claimed live match actually exists, but answer it conversationally.
     """
     cleaned = text.strip()
     if not cleaned:
         return False
-    # A casual observation is conversation, not permission to spend a web lookup.
-    # For example: "estoy viendo el Barça" should receive a short natural reply.
-    if SPORTS.search(cleaned) and SPORTS_LIVE_REQUEST.search(cleaned):
+    # Treat claims about a current match as an unverified premise. ALI should
+    # know whether it is real before replying, even if no direct question was asked.
+    if SPORTS.search(cleaned) and SPORTS_LIVE_CONTEXT.search(cleaned):
         return True
     if WEATHER.search(cleaned) and CURRENT_TIME_HINT.search(cleaned):
         return True
@@ -60,8 +60,10 @@ def needs_live_context(text: str) -> bool:
 def live_context_instruction(text: str) -> str:
     if SPORTS.search(text):
         return (
-            "Comprueba en la web si hay partido relevante en curso o jugado hoy, rival, marcador, minuto/estado y competición. "
-            "No preguntes al usuario cómo van si esa información pública se puede consultar."
+            "Verifica primero la premisa del usuario con fuentes públicas recientes: determina si el equipo juega ahora, "
+            "si ya ha jugado hoy o si no existe partido actual. No inventes ni confirmes una afirmación sin evidencia. "
+            "Responde en una sola frase natural para voz: si hay partido, da solo rival y estado/marcador; si no lo hay, "
+            "dilo claramente. No incluyas enlaces, citas, alineaciones, crónicas ni un resumen largo."
         )
     if WEATHER.search(text):
         return "Comprueba meteorología actual o prevista pertinente antes de responder."
