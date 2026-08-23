@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ALI · Enrolar voz de Ismael</title>
+  <style>
+    :root { color-scheme: dark; font-family: Arial, sans-serif; background:#020a0d; color:#d9fcff; }
+    * { box-sizing:border-box; }
+    body { margin:0; min-height:100vh; display:grid; place-items:center; background:radial-gradient(circle at 50% -20%,#123f4b 0,transparent 36rem),linear-gradient(135deg,#02080b,#06181d 52%,#010506); }
+    main { width:min(720px,calc(100vw - 28px)); border:1px solid rgba(90,219,224,.35); background:rgba(3,18,22,.95); padding:28px; box-shadow:0 18px 50px rgba(0,0,0,.35); }
+    .eyebrow { color:#62bac1; font-size:11px; letter-spacing:.16em; }
+    h1 { font-weight:300; letter-spacing:.05em; margin:8px 0 10px; }
+    p { color:#9bc7c9; line-height:1.55; }
+    .card { margin-top:20px; border:1px solid rgba(90,219,224,.2); padding:18px; background:rgba(9,42,47,.45); }
+    input[type=file] { width:100%; padding:14px; border:1px dashed #4baeb4; background:#031013; color:#d9fcff; }
+    button { margin-top:14px; width:100%; padding:14px 16px; border:1px solid #66f7e9; background:rgba(16,128,136,.22); color:#cffffb; font-weight:700; cursor:pointer; }
+    button:hover { background:#49e5df; color:#012023; }
+    button:disabled { opacity:.5; cursor:wait; }
+    #status { margin-top:16px; white-space:pre-wrap; border-left:3px solid #66f3e8; padding:12px; background:#0c383b4a; min-height:48px; }
+    .ok { color:#7fffdc; }
+    .warn { color:#ffd59a; }
+    code { color:#a8ffff; }
+  </style>
+</head>
+<body>
+<main>
+  <span class="eyebrow">ALI HOME · CONFIGURACIÓN DE IDENTIDAD</span>
+  <h1>Enrolar voz de Ismael</h1>
+  <p>Selecciona las tres muestras de voz. Se enviarán directamente a ALI Core para crear la huella de voz local. El audio bruto no se conserva; solo queda el embedding numérico en la base de datos local.</p>
+
+  <div class="card">
+    <p><strong>Perfil:</strong> Ismael · <strong>Recomendado:</strong> 3 muestras de 4–8 segundos.</p>
+    <input id="files" type="file" accept="audio/*,.m4a,.mp3,.wav,.webm,.ogg" multiple />
+    <button id="enroll">ENROLAR MUESTRAS</button>
+    <div id="status">Esperando los audios…</div>
+  </div>
+
+  <p class="warn">Esta página es solo de configuración. En el uso normal de la casa no tendrás que elegir quién habla: ALI intentará reconocerte automáticamente por la voz.</p>
+</main>
+<script>
+  const input = document.getElementById('files');
+  const button = document.getElementById('enroll');
+  const status = document.getElementById('status');
+
+  function line(text) {
+    status.textContent += (status.textContent ? '\n' : '') + text;
+  }
+
+  button.addEventListener('click', async () => {
+    const files = [...input.files];
+    if (!files.length) {
+      status.textContent = 'Selecciona primero los tres audios de Ismael.';
+      return;
+    }
+    button.disabled = true;
+    status.textContent = '';
+    try {
+      for (let i = 0; i < files.length; i += 1) {
+        const file = files[i];
+        line(`Procesando ${i + 1}/${files.length}: ${file.name}…`);
+        const form = new FormData();
+        form.append('username', 'ismael');
+        form.append('file', file, file.name);
+        const response = await fetch('/api/voice/enroll', { method: 'POST', body: form });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(body.detail || `HTTP ${response.status}`);
+        }
+        line(`✓ Muestra ${i + 1} añadida · total guardado: ${body.sample_count}`);
+      }
+      const profilesResponse = await fetch('/api/voice/profiles');
+      const profiles = profilesResponse.ok ? await profilesResponse.json() : [];
+      const ismael = profiles.find((profile) => profile.username === 'ismael');
+      line('');
+      line(ismael ? `LISTO · Ismael tiene ${ismael.sample_count} muestras enroladas.` : 'LISTO · muestras procesadas.');
+      line('Ya puedes volver a ALI y probar: “ALI, ¿sabes quién soy?”.');
+    } catch (error) {
+      line('');
+      line(`ERROR: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      button.disabled = false;
+    }
+  });
+</script>
+</body>
+</html>
