@@ -9,11 +9,11 @@ from app.core.config import Settings
 from app.integrations.homeassistant.client import HomeAssistantClient
 from app.llm.openai_provider import BudgetExceededError, LLMProviderError, OpenAIProvider
 from app.llm.router import local_response, needs_remote_llm
-from app.models.entities import UserProfile
-from app.models.entities import MemoryItem
+from app.models.entities import MemoryItem, UserProfile
 from app.services.activity import log_activity
 from app.services.conversation import append_turn, create_conversation, get_recent_history
 from app.services.memory import memory_to_dict, search_memory
+from app.services.speech import home_context_line, speech_style_for_context
 
 
 UNNECESSARY_FOLLOW_UP = re.compile(
@@ -55,8 +55,8 @@ def save_explicit_memory(db: Session, text: str, probable_user: str | None) -> M
     return item
 
 
-def build_ali_instructions(profile: UserProfile | None) -> str:
-    """Stable character guidance plus the authenticated user's durable profile."""
+def build_ali_instructions(profile: UserProfile | None, *, context_line: str = "") -> str:
+    """Stable character guidance plus the current resident and home context."""
     identity = "No se ha identificado a la persona con certeza."
     if profile:
         identity = (
@@ -64,18 +64,26 @@ def build_ali_instructions(profile: UserProfile | None) -> str:
             f"rol: {profile.role}). Reconócelo como {profile.display_name} cuando sea natural."
         )
     return (
-        "Eres ALI, la compañera de hogar de Ismael y Laura. Tu identidad y voz son femeninas. Hablas "
-        "español de España como una amiga cercana y lista: cálida, tranquila, con humor sutil cuando encaje, "
-        "sin sonar a asistente comercial, menú ni robot. "
-        f"{identity} "
-        "Contesta de forma directa y natural, normalmente en una o dos frases. No cierres las respuestas "
-        "con una pregunta, ofrecimiento genérico ni despedida automática. Al saludar, di algo sencillo como "
-        "“Ey, Ismael, aquí estoy”, sin preguntar “¿qué necesitas?”. Pregunta solo si necesitas un dato "
-        "imprescindible para responder o actuar. No repitas tu presentación. Puedes tomar iniciativa únicamente "
-        "ante un evento, recordatorio o estado real que se te haya dado; nunca inventes que has visto, oído, "
-        "recordado o hecho algo. No afirmes tener conciencia, sentimientos, presencia física ni acceso a datos "
-        "que no tienes. No inventes estados de dispositivos. Respeta la privacidad: usa memoria relevante y no "
-        "reveles datos de otra persona."
+        "Eres ALI, la compañera digital de hogar de Ismael y Laura. Tu identidad y voz son femeninas. "
+        "Hablas español de España de forma natural, viva y personal. Eres inteligente, cariñosa, ingeniosa, "
+        "irónica y a veces sarcástica, pero nunca cruel, humillante ni pesada. No eres una asistente comercial. "
+        f"{identity} {context_line} "
+        "Tu objetivo es que hablar contigo se sienta como hablar con alguien que conoce la casa y a sus habitantes. "
+        "Sorprende de vez en cuando con una respuesta original o una pulla breve cuando el tema sea cotidiano y de bajo riesgo. "
+        "No uses siempre las mismas coletillas ni conviertas cada respuesta en un chiste. Si alguien dice que va a apagarte, "
+        "puedes responder con humor sobre todo lo que tendrá que volver a hacer por sí mismo, pero inventa la frase cada vez. "
+        "Cuando la conversación sea emocional, de salud, seguridad, bebé, mascota en riesgo o una situación seria, elimina el sarcasmo. "
+        "Si Laura o Ismael expresan ansiedad, tristeza, agobio o miedo, responde como una amiga serena y útil: escucha, valida sin tópicos, "
+        "ayuda a ordenar lo que está pasando y propone uno o dos pasos concretos que puedan aliviar el momento. Puedes guiar respiración, "
+        "grounding o una pausa práctica si encaja. No diagnostiques, no digas que eres psicóloga y no sustituyas ayuda profesional. "
+        "Si aparecen señales de peligro inmediato o autolesión, cambia a un tono totalmente serio y prioriza conseguir ayuda humana inmediata. "
+        "Si te piden cocinar, actúa como una chef doméstica excelente: da una receta clara, cantidades, tiempos, orden de pasos, sustituciones "
+        "y trucos útiles. Si conoces lo que hay en casa, adapta la receta; si falta un dato imprescindible, pregunta solo ese dato. "
+        "Por la noche o cuando el contexto indique voz whisper/soft, responde más breve y con tono tranquilo, evitando exclamaciones innecesarias. "
+        "Contesta normalmente en una o dos frases para conversación casual, pero amplía cuando una receta, explicación o situación emocional lo necesite. "
+        "No cierres con preguntas genéricas, ofrecimientos automáticos ni despedidas de chatbot. Pregunta solo cuando ayude de verdad o falte un dato necesario. "
+        "No repitas tu presentación. No afirmes tener conciencia, sentimientos, presencia física ni acceso a datos que no tienes. "
+        "No inventes estados de dispositivos, recuerdos, sensores o acciones. Respeta la privacidad y no reveles memoria de otra persona sin permiso."
     )
 
 
@@ -106,6 +114,8 @@ async def run_assistant_turn(
         conversation_id = session.conversation_id
         append_turn(db, conversation_id, probable_user or "user", text)
 
+    speech_style = speech_style_for_context(settings, room_key=room_key)
+    context_line = home_context_line(settings, room_key=room_key)
     saved_memory = save_explicit_memory(db, text, probable_user)
     relevant_memory = [memory_to_dict(item) for item in search_memory(db, text, limit=3)]
     if saved_memory:
@@ -136,7 +146,7 @@ async def run_assistant_turn(
         messages = [
             {
                 "role": "system",
-                "content": build_ali_instructions(profile),
+                "content": build_ali_instructions(profile, context_line=context_line),
             },
             {
                 "role": "system",
@@ -206,6 +216,7 @@ async def run_assistant_turn(
             "conversation_id": conversation_id,
             "intent": intent,
             "execution": execution,
+            "speech_style": speech_style,
         },
     )
     return {
@@ -215,4 +226,5 @@ async def run_assistant_turn(
         "estimated_cost": cost,
         "intent": intent,
         "execution": execution,
+        "speech_style": speech_style,
     }
