@@ -260,6 +260,7 @@ async def voice_turn(
     conversation_id: str | None = Form(default=None),
     probable_user: str | None = Form(default=None),
     room_key: str | None = Form(default=None),
+    duration_seconds: float | None = Form(default=None, ge=0.0, le=120.0),
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> dict:
@@ -281,6 +282,7 @@ async def voice_turn(
             filename=file.filename or "ali-voice.webm",
             content_type=content_type,
             audio_bytes=audio,
+            duration_seconds=duration_seconds,
         )
     except VoiceUnavailableError:
         raise HTTPException(status_code=503, detail="voice_transcription_unavailable") from None
@@ -312,7 +314,7 @@ async def voice_turn(
         llm_used=True,
         model=settings.openai_transcription_model,
         estimated_cost=transcription_cost,
-        details={"bytes": len(audio), "transcript_retained": False},
+        details={"bytes": len(audio), "duration_seconds": duration_seconds, "transcript_retained": False},
     )
     return {
         **result,
@@ -362,6 +364,13 @@ def openai_usage(db: Session = Depends(get_db), settings: Settings = Depends(get
     month_start = now - timedelta(days=30)
     day = float(db.query(func.coalesce(func.sum(OpenAIUsage.estimated_cost), 0.0)).filter(OpenAIUsage.created_at >= day_start).scalar() or 0.0)
     month = float(db.query(func.coalesce(func.sum(OpenAIUsage.estimated_cost), 0.0)).filter(OpenAIUsage.created_at >= month_start).scalar() or 0.0)
+    by_model = {
+        str(model): float(cost or 0.0)
+        for model, cost in db.query(OpenAIUsage.model, func.sum(OpenAIUsage.estimated_cost))
+        .filter(OpenAIUsage.created_at >= month_start)
+        .group_by(OpenAIUsage.model)
+        .all()
+    }
     return {
         "daily_spend": day,
         "monthly_spend": month,
@@ -369,6 +378,7 @@ def openai_usage(db: Session = Depends(get_db), settings: Settings = Depends(get
         "monthly_limit": settings.openai_monthly_limit,
         "soft_monthly_warning": settings.openai_soft_monthly_warning,
         "enabled": settings.openai_enabled,
+        "monthly_by_model": by_model,
     }
 
 
