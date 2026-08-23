@@ -51,8 +51,8 @@ def identity_reply(
         )
     if profile:
         return (
-            f"Ahora mismo estás usando el perfil de {profile.display_name}. "
-            "La escucha rápida no me envía el audio necesario para confirmar tu huella de voz.",
+            f"Sí, {profile.display_name}. En la escucha rápida uso tu perfil de sesión; "
+            "la huella de voz se confirma cuando recibo audio local.",
             {"intent": "identity", "source": "session_profile", "confirmed": False},
         )
     return (
