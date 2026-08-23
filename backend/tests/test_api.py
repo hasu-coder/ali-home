@@ -304,7 +304,7 @@ def test_openai_budget_limit_keeps_local_home_control_working(monkeypatch):
         )
         local = client.post("/api/ask", json={"text": "ALI, enciende la cocina", "probable_user": "ismael"})
         assert remote.status_code == 200
-        assert "modo local" in remote.json()["response"]
+        assert "límite temporal de conversaciones online" in remote.json()["response"]
         assert local.status_code == 200
         assert local.json()["response"] == "Vale, enciendo la cocina."
         assert local.json()["used_remote_llm"] is False
