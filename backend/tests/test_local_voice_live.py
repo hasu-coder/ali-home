@@ -95,6 +95,43 @@ def test_voice_turn_prefers_detected_speaker_over_manual_fallback(monkeypatch):
     assert body["transcription_estimated_cost"] == 0.0
 
 
+def test_voice_identity_question_is_answered_from_local_voiceprint(monkeypatch):
+    class FakeLocalVoiceEngine:
+        def __init__(self, settings):
+            pass
+
+        async def transcribe_async(self, audio):
+            return "ALI, ¿sabes quién soy?"
+
+        async def identify_async(self, db, audio):
+            return SpeakerMatch(username="laura", similarity=0.91, accepted=True)
+
+    settings = get_settings()
+    previous_local_stt = settings.ali_local_stt_enabled
+    previous_speaker_id = settings.ali_speaker_id_enabled
+    settings.ali_local_stt_enabled = True
+    settings.ali_speaker_id_enabled = True
+    monkeypatch.setattr("app.api.routes.LocalVoiceEngine", FakeLocalVoiceEngine)
+    try:
+        response = client.post(
+            "/api/voice/turn",
+            data={"room_key": "cocina_salon", "duration_seconds": "2.0"},
+            files={"file": ("sample.wav", b"not-real-audio", "audio/wav")},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["response"] == "Sí, eres Laura. Te he reconocido por tu voz."
+        assert body["used_remote_llm"] is False
+        assert body["intent"] == {
+            "intent": "identity",
+            "source": "voiceprint",
+            "confirmed": True,
+        }
+    finally:
+        settings.ali_local_stt_enabled = previous_local_stt
+        settings.ali_speaker_id_enabled = previous_speaker_id
+
+
 def test_voice_enrolment_returns_a_clear_service_error_instead_of_http_500(monkeypatch):
     class FailingLocalVoiceEngine:
         def __init__(self, settings):
