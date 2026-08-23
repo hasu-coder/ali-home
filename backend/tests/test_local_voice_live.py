@@ -93,3 +93,21 @@ def test_voice_turn_prefers_detected_speaker_over_manual_fallback(monkeypatch):
     assert body["probable_user"] == "laura"
     assert body["transcription_source"] == "local"
     assert body["transcription_estimated_cost"] == 0.0
+
+
+def test_voice_enrolment_returns_a_clear_service_error_instead_of_http_500(monkeypatch):
+    class FailingLocalVoiceEngine:
+        def __init__(self, settings):
+            pass
+
+        async def enroll_async(self, db, *, username, audio_bytes):
+            raise RuntimeError("model_load_failed")
+
+    monkeypatch.setattr("app.api.routes.LocalVoiceEngine", FailingLocalVoiceEngine)
+    response = client.post(
+        "/api/voice/enroll",
+        data={"username": "ismael"},
+        files={"file": ("sample.wav", b"not-real-audio", "audio/wav")},
+    )
+    assert response.status_code == 503
+    assert response.json()["detail"] == "voice_enrollment_unavailable:RuntimeError"
