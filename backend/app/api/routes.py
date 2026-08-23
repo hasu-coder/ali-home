@@ -2,7 +2,8 @@ import json
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -10,11 +11,11 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings, get_settings
 from app.db.session import get_db
 from app.integrations.homeassistant.client import HomeAssistantClient
-from app.llm.openai_provider import BudgetExceededError, LLMProviderError, OpenAIProvider
-from app.llm.router import local_response, needs_remote_llm
+from app.llm.openai_provider import BudgetExceededError, LLMProviderError, OpenAIProvider, VoiceUnavailableError
 from app.models.entities import ActivityLog, ConversationSession, MemoryItem, OpenAIUsage, Pet, Room, UserProfile
 from app.services.activity import log_activity
-from app.services.conversation import append_turn, create_conversation, get_recent_history
+from app.services.assistant import run_assistant_turn
+from app.services.conversation import create_conversation
 from app.services.memory import memory_to_dict, search_memory
 
 router = APIRouter()
@@ -42,6 +43,24 @@ class AskRequest(BaseModel):
     conversation_id: str | None = None
     probable_user: str | None = None
     room_key: str | None = None
+
+
+class SpeechRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=480)
+
+
+SUPPORTED_VOICE_CONTENT_TYPES = {
+    "audio/aac",
+    "audio/flac",
+    "audio/m4a",
+    "audio/mp3",
+    "audio/mp4",
+    "audio/mpeg",
+    "audio/ogg",
+    "audio/wav",
+    "audio/webm",
+    "audio/x-wav",
+}
 
 
 def row_to_dict(row: Any) -> dict:
@@ -79,6 +98,12 @@ async def status(db: Session = Depends(get_db), settings: Settings = Depends(get
             "enabled": settings.openai_enabled,
             "configured": bool(settings.openai_api_key),
         },
+        "voice": {
+            "transcription_available": bool(settings.openai_voice_enabled and settings.openai_api_key),
+            "tts_available": bool(settings.openai_tts_enabled and settings.openai_api_key),
+            "max_seconds": settings.ali_voice_max_seconds,
+            "transcription_model": settings.openai_transcription_model,
+        },
         "home_assistant": home_assistant,
     }
 
@@ -91,6 +116,9 @@ def public_config(settings: Settings = Depends(get_settings)) -> dict:
         "openai_enabled": settings.openai_enabled,
         "openai_monthly_limit": settings.openai_monthly_limit,
         "openai_soft_monthly_warning": settings.openai_soft_monthly_warning,
+        "voice_transcription_available": bool(settings.openai_voice_enabled and settings.openai_api_key),
+        "voice_tts_available": bool(settings.openai_tts_enabled and settings.openai_api_key),
+        "voice_max_seconds": settings.ali_voice_max_seconds,
         "home_assistant_enabled": settings.home_assistant_enabled,
     }
 
@@ -213,110 +241,118 @@ def start_conversation(payload: ConversationCreate, db: Session = Depends(get_db
 
 @router.post("/ask")
 async def ask(payload: AskRequest, db: Session = Depends(get_db), settings: Settings = Depends(get_settings)) -> dict:
-    conversation_id = payload.conversation_id
-    if conversation_id:
-        append_turn(db, conversation_id, payload.probable_user or "user", payload.text)
-    else:
-        session = create_conversation(
-            db,
-            probable_user=payload.probable_user,
-            room_key=payload.room_key,
-            voice_point=payload.room_key,
-            confidence=0.5,
+    return await run_assistant_turn(
+        db=db,
+        settings=settings,
+        text=payload.text,
+        conversation_id=payload.conversation_id,
+        probable_user=payload.probable_user,
+        room_key=payload.room_key,
+        source="api",
+        provider_factory=OpenAIProvider,
+        home_assistant_factory=HomeAssistantClient,
+    )
+
+
+@router.post("/voice/turn")
+async def voice_turn(
+    file: UploadFile = File(...),
+    conversation_id: str | None = Form(default=None),
+    probable_user: str | None = Form(default=None),
+    room_key: str | None = Form(default=None),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    """Receive a short recording, transcribe it server-side, then use the normal ALI command path."""
+    content_type = (file.content_type or "").split(";", 1)[0].strip().lower()
+    if content_type not in SUPPORTED_VOICE_CONTENT_TYPES:
+        raise HTTPException(status_code=415, detail="unsupported_voice_format")
+
+    audio = await file.read(settings.ali_voice_max_bytes + 1)
+    await file.close()
+    if not audio:
+        raise HTTPException(status_code=400, detail="empty_voice_recording")
+    if len(audio) > settings.ali_voice_max_bytes:
+        raise HTTPException(status_code=413, detail="voice_recording_too_large")
+
+    provider = OpenAIProvider(settings, db)
+    try:
+        transcript, transcription_cost = await provider.transcribe_audio(
+            filename=file.filename or "ali-voice.webm",
+            content_type=content_type,
+            audio_bytes=audio,
         )
-        conversation_id = session.conversation_id
-        append_turn(db, conversation_id, payload.probable_user or "user", payload.text)
+    except VoiceUnavailableError:
+        raise HTTPException(status_code=503, detail="voice_transcription_unavailable") from None
+    except BudgetExceededError:
+        raise HTTPException(status_code=429, detail="voice_budget_limit") from None
+    except LLMProviderError:
+        raise HTTPException(status_code=502, detail="voice_transcription_failed") from None
 
-    relevant_memory = [memory_to_dict(item) for item in search_memory(db, payload.text, limit=5)]
-    used_remote = False
-    model = None
-    cost = 0.0
-    intent: dict[str, Any] | None = None
-    execution: dict[str, Any] | None = None
-    if needs_remote_llm(payload.text):
-        provider = OpenAIProvider(settings, db)
-        recent_history = get_recent_history(db, conversation_id, limit=8)
-        history_messages = [
-            {
-                "role": "assistant" if turn.get("speaker") == "ALI" else "user",
-                "content": str(turn.get("text", "")),
-            }
-            for turn in recent_history
-            if turn.get("text")
-        ]
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "Eres ALI, Asistente de Laura e Ismael. Responde en español, breve, natural y sin inventar "
-                    "estados de dispositivos."
-                ),
-            },
-            {"role": "system", "content": f"Memoria local relevante: {json.dumps(relevant_memory, ensure_ascii=False)}"},
-            *history_messages,
-        ]
-        try:
-            llm_response = await provider.complete(messages)
-            response_text = llm_response.text
-            used_remote = llm_response.used_remote_model
-            cost = llm_response.estimated_cost
-            model = llm_response.model
-        except BudgetExceededError as exc:
-            response_text = f"Estoy en modo local: {exc}."
-            model = settings.openai_model
-        except LLMProviderError:
-            response_text = "Ahora mismo estoy funcionando en modo local."
-            model = settings.openai_model
-    else:
-        local = local_response(payload.text)
-        intent = local
-        if local.get("requires_execution"):
-            ha_result = await HomeAssistantClient(settings).execute_intent(local)
-            execution = {
-                "success": ha_result.success,
-                "verified": ha_result.verified,
-                "state": ha_result.state,
-                "error": ha_result.error,
-                "status_code": ha_result.status_code,
-            }
-            if ha_result.success:
-                response_text = local["response"]
-            elif ha_result.error == "home_assistant_disabled":
-                response_text = "Ahora mismo no puedo comunicarme con la casa."
-            else:
-                response_text = local.get("failure_response") or "No he podido ejecutar esa acción."
-        else:
-            response_text = local["response"]
-
-    append_turn(db, conversation_id, "ALI", response_text)
+    result = await run_assistant_turn(
+        db=db,
+        settings=settings,
+        text=transcript,
+        conversation_id=conversation_id,
+        probable_user=probable_user,
+        room_key=room_key,
+        source="voice",
+        include_text_in_log=False,
+        provider_factory=OpenAIProvider,
+        home_assistant_factory=HomeAssistantClient,
+    )
     log_activity(
         db,
-        event_type="conversation.turn",
-        summary=response_text[:220],
-        actor=payload.probable_user,
-        source="voice_or_api",
-        action="ask",
+        event_type="voice.transcribed",
+        summary="Orden de voz recibida y transcrita.",
+        actor=probable_user,
+        source="voice",
+        action="transcribe",
         result="success",
-        llm_used=used_remote,
-        model=model,
-        estimated_cost=cost,
-        details={
-            "text": payload.text,
-            "used_remote_llm": used_remote,
-            "estimated_cost": cost,
-            "conversation_id": conversation_id,
-            "intent": intent,
-            "execution": execution,
-        },
+        llm_used=True,
+        model=settings.openai_transcription_model,
+        estimated_cost=transcription_cost,
+        details={"bytes": len(audio), "transcript_retained": False},
     )
     return {
-        "conversation_id": conversation_id,
-        "response": response_text,
-        "used_remote_llm": used_remote,
-        "estimated_cost": cost,
-        "intent": intent,
-        "execution": execution,
+        **result,
+        "transcript": transcript,
+        "transcription_model": settings.openai_transcription_model,
+        "transcription_estimated_cost": transcription_cost,
+        "estimated_cost": result["estimated_cost"] + transcription_cost,
     }
+
+
+@router.post("/voice/speech")
+async def voice_speech(
+    payload: SpeechRequest,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> Response:
+    """Optional premium TTS. It is disabled by default; browser speech costs nothing."""
+    provider = OpenAIProvider(settings, db)
+    try:
+        audio, estimated_cost = await provider.synthesize_speech(payload.text)
+    except VoiceUnavailableError:
+        raise HTTPException(status_code=503, detail="voice_synthesis_unavailable") from None
+    except BudgetExceededError:
+        raise HTTPException(status_code=429, detail="voice_budget_limit") from None
+    except LLMProviderError:
+        raise HTTPException(status_code=502, detail="voice_synthesis_failed") from None
+
+    log_activity(
+        db,
+        event_type="voice.synthesized",
+        summary="Respuesta de voz generada.",
+        source="voice",
+        action="synthesize",
+        result="success",
+        llm_used=True,
+        model=settings.openai_tts_model,
+        estimated_cost=estimated_cost,
+        details={"characters": len(payload.text), "text_retained": False},
+    )
+    return Response(content=audio, media_type="audio/mpeg", headers={"Cache-Control": "no-store"})
 
 
 @router.get("/usage/openai")
