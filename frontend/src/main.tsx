@@ -14,6 +14,7 @@ type Pet = { key: string; name: string; species: string; home_state: string; las
 type ActivityItem = { id: number; event_type: string; summary: string; actor?: string; level: number; created_at: string };
 type Usage = { daily_spend: number; monthly_spend: number; daily_limit: number; monthly_limit: number; enabled: boolean; monthly_by_model?: Record<string, number> };
 type VoiceStatus = { transcription_available: boolean; tts_available: boolean; max_seconds: number; transcription_model: string };
+type SpeechStyle = "normal" | "soft" | "whisper";
 type Status = {
   status: string;
   home_assistant: { enabled: boolean; reachable: boolean };
@@ -25,6 +26,7 @@ type AssistantResult = {
   response: string;
   used_remote_llm: boolean;
   estimated_cost: number;
+  speech_style?: SpeechStyle;
 };
 type VoiceTurnResult = AssistantResult & {
   transcript: string;
@@ -66,14 +68,16 @@ function App() {
   const [activity, setActivity] = useState<ActivityItem[]>([]);
   const [usage, setUsage] = useState<Usage | null>(null);
   const [status, setStatus] = useState<Status | null>(null);
-  const [input, setInput] = useState("ALI, enciende la cocina");
+  const [input, setInput] = useState("ALI, ¿cómo estás?");
   const [reply, setReply] = useState("");
   const [selectedRoom, setSelectedRoom] = useState<string | null>(null);
+  const [probableUser, setProbableUser] = useState("ismael");
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [isListening, setIsListening] = useState(false);
   const [isVoiceProcessing, setIsVoiceProcessing] = useState(false);
   const [voiceNotice, setVoiceNotice] = useState("Pulsa y mantén para hablar con ALI");
   const [latency, setLatency] = useState<number | null>(null);
+  const [lastSpeechStyle, setLastSpeechStyle] = useState<SpeechStyle>("normal");
   const recognition = useRef<SpeechRecognitionLike | null>(null);
   const recorder = useRef<MediaRecorder | null>(null);
   const recordingStream = useRef<MediaStream | null>(null);
@@ -103,56 +107,81 @@ function App() {
     return new Intl.NumberFormat("es-ES", { style: "currency", currency: "USD", maximumFractionDigits: 3 }).format(value || 0);
   }
 
-  function speakWithBrowser(text: string) {
-    if (!("speechSynthesis" in window)) return;
+  function pickSpanishVoice() {
+    if (!("speechSynthesis" in window)) return undefined;
+    const voices = window.speechSynthesis.getVoices();
+    return voices.find((voice) => voice.lang.toLowerCase() === "es-es")
+      || voices.find((voice) => voice.lang.toLowerCase().startsWith("es"));
+  }
+
+  function speakWithBrowser(text: string, style: SpeechStyle = "normal") {
+    if (!("speechSynthesis" in window)) {
+      setVoiceNotice("Este navegador no puede reproducir voz. Usa el botón OÍR en Chrome o Safari.");
+      return;
+    }
     window.speechSynthesis.cancel();
+    window.speechSynthesis.resume();
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.lang = "es-ES";
-    // Local command acknowledgements must remain free. This is only a temporary
-    // browser fallback; the production mini-PC will provide ALI's fixed local voice.
-    utterance.rate = 1.2;
-    utterance.pitch = 1.03;
+    const voice = pickSpanishVoice();
+    if (voice) utterance.voice = voice;
+    if (style === "whisper") {
+      utterance.volume = 0.28;
+      utterance.rate = 0.92;
+      utterance.pitch = 0.92;
+    } else if (style === "soft") {
+      utterance.volume = 0.55;
+      utterance.rate = 1.02;
+      utterance.pitch = 0.98;
+    } else {
+      utterance.volume = 1;
+      utterance.rate = 1.16;
+      utterance.pitch = 1.03;
+    }
+    utterance.onerror = () => setVoiceNotice("El navegador ha bloqueado la voz. Pulsa OÍR para reintentarlo.");
     window.speechSynthesis.speak(utterance);
   }
 
-  async function speakReply(text: string) {
+  async function speakReply(text: string, style: SpeechStyle = "normal") {
     if (apiTtsAvailable) {
       try {
-        const blob = await apiPostBlob("/api/voice/speech", { text });
+        const blob = await apiPostBlob("/api/voice/speech", { text, style });
         const audioUrl = URL.createObjectURL(blob);
         const audio = new Audio(audioUrl);
+        if (style === "whisper") audio.volume = 0.36;
+        if (style === "soft") audio.volume = 0.62;
         audio.addEventListener("ended", () => URL.revokeObjectURL(audioUrl), { once: true });
         await audio.play();
         return;
       } catch (error) {
-        console.warn("OpenAI TTS unavailable; using browser voice", error);
+        console.warn("ALI TTS unavailable; using browser voice", error);
       }
     }
-    speakWithBrowser(text);
+    speakWithBrowser(text, style);
   }
 
   function showReply(result: AssistantResult, elapsed: number, source: "texto" | "voz") {
+    const style = result.speech_style || "normal";
     setConversationId(result.conversation_id);
     setLatency(elapsed);
     setReply(result.response);
-    setVoiceNotice(`ALI respondió por ${source} en ${elapsed} ms · ${result.used_remote_llm ? "modelo remoto" : "modo local"}`);
-    if (source === "voz") {
-      // Everyday, deterministic home orders do not spend OpenAI credit. Free
-      // browser speech acknowledges them until ALI has its local TTS satellite.
-      if (result.used_remote_llm) void speakReply(result.response);
-      else speakWithBrowser(result.response);
-    }
+    setLastSpeechStyle(style);
+    setVoiceNotice(`ALI respondió por ${source} en ${elapsed} ms · ${style === "whisper" ? "modo susurro" : style === "soft" ? "modo suave" : result.used_remote_llm ? "modelo remoto" : "modo local"}`);
+    // ALI should be heard whether the turn started by text or voice. Browser
+    // speech is the free fallback; premium TTS remains opt-in in the backend.
+    void speakReply(result.response, style);
     refresh().catch(console.error);
   }
 
   async function askAli(text = input) {
     if (!text.trim()) return;
+    if ("speechSynthesis" in window) window.speechSynthesis.resume();
     const start = performance.now();
     try {
       const result = await apiPost<AssistantResult>("/api/ask", {
         text,
         conversation_id: conversationId,
-        probable_user: "ismael",
+        probable_user: probableUser,
         room_key: selectedRoom || "cocina_salon"
       });
       showReply(result, Math.round(performance.now() - start), "texto");
@@ -199,7 +228,7 @@ function App() {
     const form = new FormData();
     form.append("file", audio, "ali-voice.webm");
     if (conversationId) form.append("conversation_id", conversationId);
-    form.append("probable_user", "ismael");
+    form.append("probable_user", probableUser);
     form.append("room_key", selectedRoom || "cocina_salon");
     form.append("duration_seconds", durationSeconds.toFixed(2));
     const start = performance.now();
@@ -269,9 +298,6 @@ function App() {
 
   function startVoice() {
     if (isListening || isVoiceProcessing) return;
-    // Prefer the browser recognizer: it gives fast, zero-OpenAI-credit input
-    // for both deterministic commands and normal conversation. The API is
-    // only a compatibility fallback when the browser has no recognizer.
     if (startBrowserVoice()) return;
     if (apiTranscriptionAvailable) {
       startApiVoice().catch((error) => {
@@ -298,14 +324,14 @@ function App() {
   return <main className="ali-shell">
     <div className="scanlines" />
     <header className="hud-header">
-      <div className="brand"><span className="brand-orb"><Sparkles size={22} /></span><div><p>ALI HOME / CORE v0.2</p><h1>ALI <em>HOME</em></h1></div></div>
-      <div className="header-status"><span className={status?.status === "ok" ? "pulse-dot online" : "pulse-dot"} /> SISTEMA {status?.status === "ok" ? "OPERATIVO" : "CONECTANDO"}<small>LOCAL-FIRST · VOZ SIN CRÉDITOS OPENAI</small></div>
+      <div className="brand"><span className="brand-orb"><Sparkles size={22} /></span><div><p>ALI HOME / CORE v0.3</p><h1>ALI <em>HOME</em></h1></div></div>
+      <div className="header-status"><span className={status?.status === "ok" ? "pulse-dot online" : "pulse-dot"} /> SISTEMA {status?.status === "ok" ? "OPERATIVO" : "CONECTANDO"}<small>LOCAL-FIRST · VOZ SIN CUOTA OBLIGATORIA</small></div>
     </header>
 
     <section className="command-deck panel-glow">
       <div className="voice-core">
         <div className={`voice-ring ${isListening || isVoiceProcessing ? "listening" : ""}`}><Mic size={34} /></div>
-        <div><span className="eyebrow">INTERFAZ DE VOZ · SIN CRÉDITOS OPENAI</span><h2>{isVoiceProcessing ? "PROCESANDO" : isListening ? "TE ESCUCHO" : "HABLA CON ALI"}</h2><p>{voiceNotice}</p><span className="voice-identity">VOZ FIJA · ALI</span></div>
+        <div><span className="eyebrow">INTERFAZ DE VOZ</span><h2>{isVoiceProcessing ? "PROCESANDO" : isListening ? "TE ESCUCHO" : "HABLA CON ALI"}</h2><p>{voiceNotice}</p><span className="voice-identity">VOZ FIJA · ALI</span></div>
         <button
           className="talk-button"
           disabled={isVoiceProcessing}
@@ -334,20 +360,26 @@ function App() {
           {isListening ? <MicOff size={19} /> : <Mic size={19} />} {isVoiceProcessing ? "PROCESANDO…" : isListening ? "SOLTAR PARA ENVIAR" : "MANTÉN PARA HABLAR"}
         </button>
       </div>
-      <div className="text-command"><input value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => event.key === "Enter" && void askAli()} /><button onClick={() => void askAli()}>ENVIAR <ChevronRight size={17} /></button></div>
-      {reply && <div className="ali-reply"><Volume2 size={18} /><div><span>ALI</span>{reply}</div>{latency !== null && <b>{latency} ms</b>}</div>}
+      <div className="text-command">
+        <select className="user-picker" value={probableUser} onChange={(event) => setProbableUser(event.target.value)} aria-label="Persona que habla">
+          {users.length ? users.map((user) => <option key={user.username} value={user.username}>{user.display_name}</option>) : <><option value="ismael">Ismael</option><option value="laura">Laura</option></>}
+        </select>
+        <input value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => event.key === "Enter" && void askAli()} />
+        <button onClick={() => void askAli()}>ENVIAR <ChevronRight size={17} /></button>
+      </div>
+      {reply && <div className="ali-reply"><Volume2 size={18} /><div><span>ALI · {lastSpeechStyle === "whisper" ? "SUSURRO" : lastSpeechStyle === "soft" ? "SUAVE" : "NORMAL"}</span>{reply}</div><button className="reply-audio-button" onClick={() => void speakReply(reply, lastSpeechStyle)} aria-label="Reproducir respuesta de ALI"><Volume2 size={14} /> OÍR</button>{latency !== null && <b>{latency} ms</b>}</div>}
     </section>
 
     <section className="overview-grid">
       <article className="telemetry panel-glow"><span className="eyebrow">ESTADO AMBIENTAL</span><div className="temp-value"><Thermometer /> <strong>—<sup>°C</sup></strong></div><p>Sin sensor térmico conectado</p><div className="telemetry-row"><Wind size={16} /> Aire acondicionado <b>Sin integrar</b></div><div className="telemetry-row"><CloudSun size={16} /> Clima exterior <b>Pendiente</b></div></article>
       <article className="telemetry panel-glow"><span className="eyebrow">SEGURIDAD PERIMETRAL</span><div className="security-number"><ShieldCheck size={30} /><strong>—</strong></div><p>Puertas y ventanas sin sensores</p><div className="telemetry-row"><DoorOpen size={16} /> Puertas <b>Sin datos</b></div><div className="telemetry-row"><BellRing size={16} /> Alertas <b>0</b></div></article>
-      <article className="telemetry panel-glow"><span className="eyebrow">INTELIGENCIA ALI</span><div className="security-number"><BrainCircuit size={30} /><strong>ALI</strong></div><p>{users.map((user) => user.display_name).join(" · ") || "Perfiles cargando"}</p><div className="telemetry-row"><Radio size={16} /> Voz <b>{apiTtsAvailable ? "ALI natural en conversación" : voiceRooms.length ? "Punto previsto" : "Prueba web"}</b></div><div className="telemetry-row"><Gauge size={16} /> Coste estimado hoy <b>{usd(usage?.daily_spend)}</b></div><div className="telemetry-row"><Gauge size={16} /> Tope mensual <b>{usd(usage?.monthly_limit)}</b></div></article>
+      <article className="telemetry panel-glow"><span className="eyebrow">INTELIGENCIA ALI</span><div className="security-number"><BrainCircuit size={30} /><strong>ALI</strong></div><p>{users.map((user) => user.display_name).join(" · ") || "Perfiles cargando"}</p><div className="telemetry-row"><Radio size={16} /> Voz <b>{apiTtsAvailable ? "ALI natural en conversación" : voiceRooms.length ? "Punto previsto" : "Voz del navegador"}</b></div><div className="telemetry-row"><Gauge size={16} /> Coste estimado hoy <b>{usd(usage?.daily_spend)}</b></div><div className="telemetry-row"><Gauge size={16} /> Tope mensual <b>{usd(usage?.monthly_limit)}</b></div></article>
     </section>
 
     <section className="home-grid">
       <article className="house-panel panel-glow"><div className="section-heading"><div><span className="eyebrow">VISTA SATÉLITE · PLANO ESQUEMÁTICO</span><h2>CASA <em>EN VIVO</em></h2></div><span className="house-live"><span className="pulse-dot online" /> {status?.home_assistant?.reachable ? "SENSORES EN LÍNEA" : "SIN SENSORES CONECTADOS"}</span></div>
         <div className="house-map">{rooms.map((room) => { const pos = roomPositions[room.key] || { x: 8, y: 8, w: 25, h: 20 }; return <button key={room.key} className={`map-room ${selectedRoom === room.key ? "selected" : ""}`} style={{ left: `${pos.x}%`, top: `${pos.y}%`, width: `${pos.w}%`, height: `${pos.h}%` }} onClick={() => setSelectedRoom(room.key)}><span>{room.name}</span><small>{room.has_voice_point ? "◉ VOZ" : "○ SIN VOZ"}</small></button>; })}<div className="map-radar" /></div>
-        <div className="map-legend"><span><Lightbulb size={14} /> Iluminación: pendiente</span><span><AirVent size={14} /> Clima: pendiente</span><span><Mic size={14} /> Micrófono: navegador sin créditos OpenAI</span></div>
+        <div className="map-legend"><span><Lightbulb size={14} /> Iluminación: pendiente</span><span><AirVent size={14} /> Clima: pendiente</span><span><Mic size={14} /> Micrófono: navegador / futuro punto ALI</span></div>
       </article>
 
       <aside className="room-console panel-glow"><span className="eyebrow">CONSOLA DE ESTANCIA</span>{selected ? <><h2>{selected.name}</h2><p>{selected.floor} · {selected.has_voice_point ? "Punto de voz previsto" : "Sin punto de voz"}</p><div className="control-state"><Lightbulb /> Iluminación <b>Sin conectar</b></div><div className="control-state"><AirVent /> Aire acondicionado <b>Sin conectar</b></div><div className="control-state"><DoorOpen /> Puertas / ventanas <b>Sin sensor</b></div><div className="action-buttons"><button onClick={() => commandFor(selected, "enciende")}>ENCENDER</button><button onClick={() => commandFor(selected, "apaga")}>APAGAR</button></div></> : <div className="select-room"><HomeGlyph /><p>Selecciona una estancia en el plano para ver sus controles.</p></div>}<div className="pet-card"><Cat size={18} /><div><span>{pets[0]?.name || "CAT"}</span><b>{pets[0]?.home_state || "Sin datos"}</b></div></div></aside>
