@@ -139,11 +139,10 @@ class LocalVoiceEngine:
         values = encoded.squeeze().detach().cpu().tolist()
         return normalize_embedding([float(value) for value in values])
 
-    def enroll(self, db: Session, *, username: str, audio_bytes: bytes) -> VoiceProfile:
+    def store_enrollment(self, db: Session, *, username: str, incoming: list[float]) -> VoiceProfile:
         user = db.query(UserProfile).filter_by(username=username).first()
         if not user:
             raise ValueError("unknown_user")
-        incoming = self.speaker_embedding(audio_bytes)
         profile = db.query(VoiceProfile).filter_by(username=username).first()
         if profile:
             previous = json.loads(profile.embedding)
@@ -171,11 +170,10 @@ class LocalVoiceEngine:
         db.refresh(profile)
         return profile
 
-    def identify(self, db: Session, *, audio_bytes: bytes) -> SpeakerMatch:
+    def match_embedding(self, db: Session, incoming: list[float]) -> SpeakerMatch:
         profiles = db.query(VoiceProfile).filter_by(active=True).all()
         if not profiles:
             return SpeakerMatch(username=None, similarity=0.0, accepted=False)
-        incoming = self.speaker_embedding(audio_bytes)
         best_username = None
         best_similarity = -1.0
         for profile in profiles:
@@ -195,7 +193,9 @@ class LocalVoiceEngine:
         return await asyncio.to_thread(self.transcribe, audio_bytes)
 
     async def identify_async(self, db: Session, audio_bytes: bytes) -> SpeakerMatch:
-        return await asyncio.to_thread(self.identify, db, audio_bytes=audio_bytes)
+        incoming = await asyncio.to_thread(self.speaker_embedding, audio_bytes)
+        return self.match_embedding(db, incoming)
 
     async def enroll_async(self, db: Session, *, username: str, audio_bytes: bytes) -> VoiceProfile:
-        return await asyncio.to_thread(self.enroll, db, username=username, audio_bytes=audio_bytes)
+        incoming = await asyncio.to_thread(self.speaker_embedding, audio_bytes)
+        return self.store_enrollment(db, username=username, incoming=incoming)
