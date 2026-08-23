@@ -21,7 +21,7 @@ This repository currently contains the first executable foundation:
 - OpenAI provider with daily and monthly budget limits.
 - Local intent router so simple home commands do not call GPT.
 - Secure browser-to-backend voice turn: OpenAI transcription is optional and the API key never reaches the frontend.
-- Immediate browser speech by default, with optional OpenAI TTS for a more natural voice.
+- Fast browser speech for local commands, with optional fixed OpenAI TTS for natural conversations.
 - Initial ALI Home frontend.
 - Docker Compose runtime.
 - Validation script for running Phase 1 outside Vento.
@@ -50,16 +50,20 @@ Secrets must stay in `.env`, never in Git.
 
 ```env
 OPENAI_API_KEY=
-OPENAI_MODEL=gpt-4.1-mini
+OPENAI_MODEL=gpt-4o-mini
 OPENAI_ENABLED=false
 OPENAI_MONTHLY_LIMIT=2.00
 OPENAI_DAILY_LIMIT=0.10
 OPENAI_VOICE_ENABLED=false
 OPENAI_TRANSCRIPTION_MODEL=gpt-4o-mini-transcribe
 OPENAI_TTS_ENABLED=false
+OPENAI_TTS_VOICE=coral
+OPENAI_TTS_SPEED=1.2
 HOME_ASSISTANT_URL=http://homeassistant.local:8123
 HOME_ASSISTANT_TOKEN=
 HOME_ASSISTANT_ENABLED=false
+HOME_ASSISTANT_COVER_ENTITY_ID=
+HOME_ASSISTANT_CLIMATE_ENTITY_ID=
 ```
 
 ## Runtime Rule
@@ -77,7 +81,9 @@ The LLM must not directly control critical hardware. Natural language is convert
 
 ## Local-First Cost Rule
 
-Known commands such as "enciende la cocina" are handled locally and do not call GPT. GPT is only used for advanced conversation or reasoning. Voice recordings are short-lived uploads: ALI validates their size and format, sends them only to the configured transcription provider, and does not save the audio or transcript in the Activity Log. All remote usage is logged with estimated cost and checked against configurable budgets.
+Known commands such as "enciende la cocina", "baja las persianas" and "pon el aire a 22 grados" are handled locally and never call GPT. They are only sent to Home Assistant after their configured entity ID is known; before that, ALI says plainly that the device is not linked.
+
+The web interface first uses the browser's speech recognition, so it consumes no OpenAI credit. If that browser feature is unavailable, the optional short-audio transcription endpoint is the compatibility fallback and its estimated OpenAI cost is logged. On the future home mini-PC, both wake-word detection and transcription can be local. OpenAI TTS is called only for open conversations, never for deterministic home-command acknowledgements.
 
 ## Voice setup (cheap default)
 
@@ -89,7 +95,7 @@ OPENAI_ENABLED=false
 OPENAI_TTS_ENABLED=false
 ```
 
-This gives ALI OpenAI speech recognition while responses use the browser's built-in Spanish voice at no extra API cost. It is the default low-cost route. Turn on `OPENAI_TTS_ENABLED=true` only when you want a more natural OpenAI voice; it also counts against the same daily and monthly budget.
+This enables the short-audio fallback for browsers without speech recognition. The normal web route uses browser recognition first, and local home commands answer with the browser's quick voice at no OpenAI cost. Turn on `OPENAI_TTS_ENABLED=true` only when you want ALI's natural fixed voice for open conversations; it also counts against the same daily and monthly budget. `OPENAI_TTS_SPEED=1.2` is the default agile pace.
 
 ## Persistence
 
