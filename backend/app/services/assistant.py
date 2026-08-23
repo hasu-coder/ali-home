@@ -158,6 +158,16 @@ async def run_assistant_turn(
             model = settings.openai_model
     else:
         local = local_response(text)
+        entity_setting = local.get("entity_setting")
+        if entity_setting:
+            configured_entity_id = str(getattr(settings, entity_setting, "")).strip()
+            if configured_entity_id:
+                local["entity_id"] = configured_entity_id
+            else:
+                # A local order stays local even before its physical device is
+                # installed. Do not call Home Assistant with a guessed ID.
+                local["requires_execution"] = False
+                response_text = local.get("unavailable_response") or "Ese dispositivo todavía no está enlazado."
         intent = local
         if local.get("requires_execution"):
             ha_result = await home_assistant_factory(settings).execute_intent(local)
@@ -171,10 +181,10 @@ async def run_assistant_turn(
             if ha_result.success:
                 response_text = local["response"]
             elif ha_result.error == "home_assistant_disabled":
-                response_text = "Ahora mismo no puedo comunicarme con la casa."
+                response_text = local.get("home_unavailable_response") or "Ahora mismo no puedo comunicarme con la casa."
             else:
                 response_text = local.get("failure_response") or "No he podido ejecutar esa acción."
-        else:
+        elif not entity_setting or str(getattr(settings, entity_setting, "")).strip():
             response_text = local["response"]
 
     append_turn(db, conversation_id, "ALI", response_text)
