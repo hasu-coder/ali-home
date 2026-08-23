@@ -107,6 +107,7 @@ def test_short_natural_language_requests_can_use_ali():
 
 def test_ali_removes_canned_closing_questions():
     assert remove_automatic_follow_up("Eres Ismael. ¿Quieres que te ayude con algo más?") == "Eres Ismael."
+    assert remove_automatic_follow_up("Ey, Ismael. ¿Qué necesitas?") == "Ey, Ismael."
     assert remove_automatic_follow_up("Necesito saber la habitación. ¿En cuál estás?") == "Necesito saber la habitación. ¿En cuál estás?"
 
 
