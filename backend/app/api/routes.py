@@ -421,6 +421,7 @@ async def voice_turn(
         room_key=room_key,
         source="voice",
         include_text_in_log=False,
+        identity_confirmed=speaker_identified,
         provider_factory=OpenAIProvider,
         home_assistant_factory=HomeAssistantClient,
     )
