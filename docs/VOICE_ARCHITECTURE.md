@@ -6,8 +6,8 @@ ALI should feel present in the house without continuously streaming household au
 
 ## What works today
 
-- A short push-to-talk recording is transcribed only after the resident finishes speaking.
-- ALI uses one fixed natural synthesized voice; the browser voice picker is intentionally not used.
+- The web demo first uses the browser's speech recognizer, so speaking a command spends no OpenAI credit. The short push-to-talk transcription endpoint is only a compatibility fallback.
+- ALI has one fixed natural cloud voice for open conversations. Deterministic home commands use a quick free browser acknowledgement in the demo; the home mini-PC will replace it with ALI's fixed local voice.
 - Recordings stop automatically after eight seconds and the backend records the clip's measured duration for its local cost estimate.
 - A conversation stays open briefly so its context can continue, and explicit memories are stored only after “ALI, recuerda que …”.
 
@@ -48,6 +48,16 @@ Fixed ALI voice in the originating room
 ## Why not use Realtime for always-on listening
 
 Realtime is useful for a live conversation after activation, but sending continuous room audio to it would cost more, weaken privacy, and make cloud availability a requirement. The wake word and silence detection belong locally; a Realtime mode can later be used only for the active conversation window if it proves worthwhile.
+
+## Cost boundary
+
+```text
+"ALI, baja las persianas"  -> local intent -> Home Assistant -> local TTS -> €0 OpenAI
+"ALI, pon el aire a 22"    -> local intent -> Home Assistant -> local TTS -> €0 OpenAI
+"ALI, ayúdame a planear..." -> optional remote conversation -> ALI voice -> OpenAI budget
+```
+
+In the Codespaces web demo, the first and second lines use browser recognition and browser speech to avoid OpenAI charges. The production replacement is local wake-word detection, local speech-to-text and a local Spanish TTS voice on the mini-PC; neither option continuously uploads room audio.
 
 ## Hardware rollout
 
