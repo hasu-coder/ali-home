@@ -74,7 +74,11 @@ class HomeAssistantClient:
         if not domain or not service or not entity_id:
             return HomeAssistantActionResult(success=False, error="intent_not_executable")
 
-        result = await self.call_service(domain, service, {"entity_id": entity_id})
+        service_data = {"entity_id": entity_id}
+        extra_service_data = intent.get("service_data")
+        if isinstance(extra_service_data, dict):
+            service_data.update(extra_service_data)
+        result = await self.call_service(domain, service, service_data)
         if not result.success:
             return result
 
