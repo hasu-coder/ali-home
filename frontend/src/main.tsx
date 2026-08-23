@@ -1,6 +1,9 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { createRoot } from "react-dom/client";
-import { Activity, Brain, Cat, Home, Lightbulb, MessageCircle, Shield, Users, Zap } from "lucide-react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import {
+  Activity, AirVent, BellRing, BrainCircuit, Cat, ChevronRight, CloudSun, DoorOpen,
+  Flame, Gauge, Lightbulb, Mic, MicOff, Radio, ShieldCheck, Sparkles, Thermometer,
+  Volume2, Wind
+} from "lucide-react";
 import { apiGet, apiPost } from "./api/client";
 import "./styles/app.css";
 
@@ -9,20 +12,25 @@ type Room = { key: string; name: string; floor: string; has_voice_point: boolean
 type Pet = { key: string; name: string; species: string; home_state: string; last_known_room?: string | null };
 type ActivityItem = { id: number; event_type: string; summary: string; actor?: string; level: number; created_at: string };
 type Usage = { daily_spend: number; monthly_spend: number; daily_limit: number; monthly_limit: number; enabled: boolean };
-type Health = { status: string; service: string };
+type Status = { status: string; home_assistant: { enabled: boolean; reachable: boolean }; database: { rooms: number } };
+type SpeechRecognitionLike = { lang: string; interimResults: boolean; continuous: boolean; onresult: ((event: any) => void) | null; onerror: (() => void) | null; onend: (() => void) | null; start: () => void; stop: () => void };
 
-function StatCard({ icon, label, value, meta }: { icon: React.ReactNode; label: string; value: string; meta?: string }) {
-  return (
-    <section className="stat-card">
-      <div className="stat-icon">{icon}</div>
-      <div>
-        <p>{label}</p>
-        <strong>{value}</strong>
-        {meta ? <span>{meta}</span> : null}
-      </div>
-    </section>
-  );
+declare global {
+  interface Window {
+    SpeechRecognition?: new () => SpeechRecognitionLike;
+    webkitSpeechRecognition?: new () => SpeechRecognitionLike;
+  }
 }
+
+const roomPositions: Record<string, { x: number; y: number; w: number; h: number }> = {
+  entrada: { x: 6, y: 37, w: 23, h: 24 },
+  cocina_salon: { x: 31, y: 8, w: 63, h: 35 },
+  salon_entresuelo: { x: 31, y: 46, w: 32, h: 22 },
+  bano: { x: 66, y: 46, w: 28, h: 22 },
+  vestidor: { x: 6, y: 64, w: 23, h: 27 },
+  dormitorio_matrimonio: { x: 31, y: 71, w: 37, h: 20 },
+  habitacion_bebe: { x: 70, y: 71, w: 24, h: 20 }
+};
 
 function App() {
   const [users, setUsers] = useState<UserProfile[]>([]);
@@ -30,105 +38,111 @@ function App() {
   const [pets, setPets] = useState<Pet[]>([]);
   const [activity, setActivity] = useState<ActivityItem[]>([]);
   const [usage, setUsage] = useState<Usage | null>(null);
-  const [health, setHealth] = useState<Health | null>(null);
+  const [status, setStatus] = useState<Status | null>(null);
   const [input, setInput] = useState("ALI, enciende la cocina");
   const [reply, setReply] = useState("");
+  const [selectedRoom, setSelectedRoom] = useState<string | null>(null);
+  const [isListening, setIsListening] = useState(false);
+  const [voiceNotice, setVoiceNotice] = useState("Pulsa para probar el micrófono");
+  const [latency, setLatency] = useState<number | null>(null);
+  const recognition = useRef<SpeechRecognitionLike | null>(null);
 
   async function refresh() {
-    const [nextHealth, nextUsers, nextRooms, nextPets, nextActivity, nextUsage] = await Promise.all([
-      apiGet<Health>("/api/health"),
-      apiGet<UserProfile[]>("/api/users"),
-      apiGet<Room[]>("/api/rooms"),
-      apiGet<Pet[]>("/api/pets"),
-      apiGet<ActivityItem[]>("/api/activity"),
-      apiGet<Usage>("/api/usage/openai")
+    const [nextStatus, nextUsers, nextRooms, nextPets, nextActivity, nextUsage] = await Promise.all([
+      apiGet<Status>("/api/status"), apiGet<UserProfile[]>("/api/users"), apiGet<Room[]>("/api/rooms"),
+      apiGet<Pet[]>("/api/pets"), apiGet<ActivityItem[]>("/api/activity"), apiGet<Usage>("/api/usage/openai")
     ]);
-    setHealth(nextHealth);
-    setUsers(nextUsers);
-    setRooms(nextRooms);
-    setPets(nextPets);
-    setActivity(nextActivity);
-    setUsage(nextUsage);
+    setStatus(nextStatus); setUsers(nextUsers); setRooms(nextRooms); setPets(nextPets); setActivity(nextActivity); setUsage(nextUsage);
   }
 
-  useEffect(() => {
-    refresh().catch(console.error);
-  }, []);
-
+  useEffect(() => { refresh().catch(console.error); }, []);
+  const selected = rooms.find((room) => room.key === selectedRoom);
   const voiceRooms = useMemo(() => rooms.filter((room) => room.has_voice_point), [rooms]);
 
-  async function askAli() {
+  async function askAli(text = input) {
+    if (!text.trim()) return;
+    const start = performance.now();
     const result = await apiPost<{ response: string; used_remote_llm: boolean; estimated_cost: number }>("/api/ask", {
-      text: input,
-      probable_user: "ismael",
-      room_key: "cocina_salon"
+      text, probable_user: "ismael", room_key: selectedRoom || "cocina_salon"
     });
-    setReply(`${result.response}${result.used_remote_llm ? ` · GPT ${result.estimated_cost.toFixed(5)} EUR aprox.` : " · Local"}`);
+    const elapsed = Math.round(performance.now() - start);
+    setLatency(elapsed);
+    setReply(result.response);
+    setVoiceNotice(`ALI respondió en ${elapsed} ms · ${result.used_remote_llm ? "modo remoto" : "modo local"}`);
+    if ("speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.speak(new SpeechSynthesisUtterance(result.response));
+    }
     await refresh();
   }
 
-  return (
-    <main className="app-shell">
-      <header className="topbar">
-        <div>
-          <h1>ALI</h1>
-          <p>Asistente de Laura e Ismael</p>
-        </div>
-        <div className="runtime-pill">{health?.status === "ok" ? "ALI Core online" : "ALI Core unavailable"} · Local-first</div>
-      </header>
+  function startVoice() {
+    const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!Recognition) {
+      setVoiceNotice("Este navegador no ofrece reconocimiento de voz. Prueba Chrome o Safari.");
+      return;
+    }
+    const instance = new Recognition();
+    recognition.current = instance;
+    instance.lang = "es-ES";
+    instance.interimResults = false;
+    instance.continuous = false;
+    instance.onresult = (event) => {
+      const text = event.results[0][0].transcript;
+      setInput(text);
+      setVoiceNotice(`Reconocido: “${text}”`);
+      askAli(text).catch(() => setVoiceNotice("ALI no ha podido procesar la frase."));
+    };
+    instance.onerror = () => setVoiceNotice("No he podido oírte. Revisa el permiso de micrófono.");
+    instance.onend = () => setIsListening(false);
+    instance.start();
+    setIsListening(true);
+    setVoiceNotice("Escuchando… habla ahora");
+  }
 
-      <section className="grid stats">
-        <StatCard icon={<Users size={20} />} label="Personas" value={users.map((u) => u.display_name).join(" · ")} meta="perfiles locales" />
-        <StatCard icon={<Cat size={20} />} label="Gato" value={pets[0]?.home_state || "Sin datos"} meta={pets[0]?.last_known_room || "ubicación pendiente"} />
-        <StatCard icon={<Home size={20} />} label="Habitaciones" value={`${rooms.length}`} meta={`${voiceRooms.length} puntos de voz previstos`} />
-        <StatCard icon={<Zap size={20} />} label="GPT" value={`${usage?.monthly_spend.toFixed(4) ?? "0.0000"} €`} meta={`límite ${usage?.monthly_limit ?? 0} €/mes`} />
-      </section>
+  function stopVoice() { recognition.current?.stop(); }
+  function commandFor(room: Room, action: string) {
+    const text = `ALI, ${action} ${room.name.toLowerCase()}`;
+    setInput(text); askAli(text).catch(console.error);
+  }
 
-      <section className="panel command-panel">
-        <div>
-          <h2><Brain size={20} /> ALI Core</h2>
-          <p>Prueba inicial de enrutado local/GPT. Los comandos conocidos no usan GPT.</p>
-        </div>
-        <div className="command-row">
-          <input value={input} onChange={(event) => setInput(event.target.value)} />
-          <button onClick={askAli}>Enviar</button>
-        </div>
-        {reply ? <div className="reply"><MessageCircle size={18} /> {reply}</div> : null}
-      </section>
+  return <main className="jarvis-shell">
+    <div className="scanlines" />
+    <header className="hud-header">
+      <div className="brand"><span className="brand-orb"><Sparkles size={22} /></span><div><p>ALI HOME / CORE v0.1</p><h1>JARVIS <em>MODE</em></h1></div></div>
+      <div className="header-status"><span className={status?.status === "ok" ? "pulse-dot online" : "pulse-dot"} /> SISTEMA {status?.status === "ok" ? "OPERATIVO" : "CONECTANDO"}<small>LOCAL-FIRST · SIN NUBE</small></div>
+    </header>
 
-      <section className="dashboard-grid">
-        <div className="panel">
-          <h2><Lightbulb size={20} /> Habitaciones</h2>
-          <div className="room-list">
-            {rooms.map((room) => (
-              <article key={room.key} className="room-row">
-                <span>{room.name}</span>
-                <small>{room.floor}{room.has_voice_point ? " · voz" : ""}</small>
-              </article>
-            ))}
-          </div>
-        </div>
+    <section className="command-deck panel-glow">
+      <div className="voice-core">
+        <div className={`voice-ring ${isListening ? "listening" : ""}`}><Mic size={34} /></div>
+        <div><span className="eyebrow">INTERFAZ DE VOZ · PRUEBA DE LATENCIA</span><h2>{isListening ? "TE ESCUCHO" : "HABLA CON ALI"}</h2><p>{voiceNotice}</p></div>
+        <button className="talk-button" onMouseDown={startVoice} onMouseUp={stopVoice} onMouseLeave={stopVoice} onTouchStart={startVoice} onTouchEnd={stopVoice} aria-label="Mantén pulsado para hablar">
+          {isListening ? <MicOff size={19} /> : <Mic size={19} />} {isListening ? "SOLTAR" : "MANTÉN PARA HABLAR"}
+        </button>
+      </div>
+      <div className="text-command"><input value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => event.key === "Enter" && askAli().catch(console.error)} /><button onClick={() => askAli().catch(console.error)}>ENVIAR <ChevronRight size={17} /></button></div>
+      {reply && <div className="ali-reply"><Volume2 size={18} /><div><span>ALI</span>{reply}</div>{latency !== null && <b>{latency} ms</b>}</div>}
+    </section>
 
-        <div className="panel">
-          <h2><Activity size={20} /> ALI Activity</h2>
-          <div className="activity-list">
-            {activity.map((item) => (
-              <article key={item.id}>
-                <strong>{item.event_type}</strong>
-                <p>{item.summary}</p>
-                <small>{new Date(item.created_at).toLocaleString()}</small>
-              </article>
-            ))}
-          </div>
-        </div>
+    <section className="overview-grid">
+      <article className="telemetry panel-glow"><span className="eyebrow">ESTADO AMBIENTAL</span><div className="temp-value"><Thermometer /> <strong>—<sup>°C</sup></strong></div><p>Sin sensor térmico conectado</p><div className="telemetry-row"><Wind size={16} /> Aire acondicionado <b>Sin integrar</b></div><div className="telemetry-row"><CloudSun size={16} /> Clima exterior <b>Pendiente</b></div></article>
+      <article className="telemetry panel-glow"><span className="eyebrow">SEGURIDAD PERIMETRAL</span><div className="security-number"><ShieldCheck size={30} /><strong>—</strong></div><p>Puertas y ventanas sin sensores</p><div className="telemetry-row"><DoorOpen size={16} /> Puertas <b>Sin datos</b></div><div className="telemetry-row"><BellRing size={16} /> Alertas <b>0</b></div></article>
+      <article className="telemetry panel-glow"><span className="eyebrow">INTELIGENCIA ALI</span><div className="security-number"><BrainCircuit size={30} /><strong>LOCAL</strong></div><p>{users.map((user) => user.display_name).join(" · ") || "Perfiles cargando"}</p><div className="telemetry-row"><Radio size={16} /> Voz <b>{voiceRooms.length ? "Punto previsto" : "Prueba web"}</b></div><div className="telemetry-row"><Gauge size={16} /> GPT <b>{usage?.enabled ? "Activo" : "Apagado"}</b></div></article>
+    </section>
 
-        <div className="panel">
-          <h2><Shield size={20} /> Safety Core</h2>
-          <p className="muted">Reservado para la siguiente fase funcional. Debe ejecutarse localmente aunque GPT o Internet no estén disponibles.</p>
-        </div>
-      </section>
-    </main>
-  );
+    <section className="home-grid">
+      <article className="house-panel panel-glow"><div className="section-heading"><div><span className="eyebrow">VISTA SATÉLITE · PLANO ESQUEMÁTICO</span><h2>CASA <em>EN VIVO</em></h2></div><span className="house-live"><span className="pulse-dot online" /> {status?.home_assistant?.reachable ? "SENSORES EN LÍNEA" : "SIN SENSORES CONECTADOS"}</span></div>
+        <div className="house-map">{rooms.map((room) => { const pos = roomPositions[room.key] || { x: 8, y: 8, w: 25, h: 20 }; return <button key={room.key} className={`map-room ${selectedRoom === room.key ? "selected" : ""}`} style={{ left: `${pos.x}%`, top: `${pos.y}%`, width: `${pos.w}%`, height: `${pos.h}%` }} onClick={() => setSelectedRoom(room.key)}><span>{room.name}</span><small>{room.has_voice_point ? "◉ VOZ" : "○ SIN VOZ"}</small></button>; })}<div className="map-radar" /></div>
+        <div className="map-legend"><span><Lightbulb size={14} /> Iluminación: pendiente</span><span><AirVent size={14} /> Clima: pendiente</span><span><Mic size={14} /> Micrófono: prueba web</span></div>
+      </article>
+
+      <aside className="room-console panel-glow"><span className="eyebrow">CONSOLA DE ESTANCIA</span>{selected ? <><h2>{selected.name}</h2><p>{selected.floor} · {selected.has_voice_point ? "Punto de voz previsto" : "Sin punto de voz"}</p><div className="control-state"><Lightbulb /> Iluminación <b>Sin conectar</b></div><div className="control-state"><AirVent /> Aire acondicionado <b>Sin conectar</b></div><div className="control-state"><DoorOpen /> Puertas / ventanas <b>Sin sensor</b></div><div className="action-buttons"><button onClick={() => commandFor(selected, "enciende")}>ENCENDER</button><button onClick={() => commandFor(selected, "apaga")}>APAGAR</button></div></> : <div className="select-room"><HomeGlyph /><p>Selecciona una estancia en el plano para ver sus controles.</p></div>}<div className="pet-card"><Cat size={18} /><div><span>{pets[0]?.name || "CAT"}</span><b>{pets[0]?.home_state || "Sin datos"}</b></div></div></aside>
+    </section>
+
+    <section className="bottom-grid"><article className="activity-panel panel-glow"><div className="section-heading"><div><span className="eyebrow">EVENTOS RECIENTES</span><h2>ACTIVITY LOG</h2></div><Activity size={20} /></div>{activity.slice(0, 4).map((item) => <div className="activity-row" key={item.id}><span className="pulse-dot online" /><div><b>{item.event_type}</b><p>{item.summary}</p></div><time>{new Date(item.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time></div>)}{!activity.length && <p className="muted">Esperando actividad de ALI…</p>}</article><article className="safety-panel panel-glow"><Flame size={25} /><div><span className="eyebrow">SAFETY CORE</span><h2>NO INVENTARÉ ESTADOS</h2><p>ALI mostrará “sin datos” hasta que existan sensores reales. Nunca afirmará que una puerta, luz o clima está bien sin comprobarlo.</p></div></article></section>
+  </main>;
 }
 
+function HomeGlyph() { return <div className="home-glyph"><span /><span /><span /></div>; }
 createRoot(document.getElementById("root")!).render(<App />);
