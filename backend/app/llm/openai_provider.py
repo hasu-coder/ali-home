@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime, timedelta, timezone
+from math import ceil
 
 import httpx
 from openai import AsyncOpenAI
@@ -17,6 +18,10 @@ class BudgetExceededError(RuntimeError):
 
 
 class LLMProviderError(RuntimeError):
+    pass
+
+
+class VoiceUnavailableError(RuntimeError):
     pass
 
 
@@ -38,14 +43,36 @@ class OpenAIProvider(LLMProvider):
         ).scalar()
         return float(value or 0.0)
 
-    def _check_budget(self) -> None:
+    def _check_budget(self, reserve_cost: float = 0.0) -> None:
         now = datetime.now(timezone.utc)
         day_start = now - timedelta(days=1)
         month_start = now - timedelta(days=30)
-        if self._spent_since(day_start) >= self.settings.openai_daily_limit:
+        daily_spend = self._spent_since(day_start)
+        monthly_spend = self._spent_since(month_start)
+        if daily_spend >= self.settings.openai_daily_limit or daily_spend + reserve_cost >= self.settings.openai_daily_limit:
             raise BudgetExceededError("Daily OpenAI budget limit reached")
-        if self._spent_since(month_start) >= self.settings.openai_monthly_limit:
+        if monthly_spend >= self.settings.openai_monthly_limit or monthly_spend + reserve_cost >= self.settings.openai_monthly_limit:
             raise BudgetExceededError("Monthly OpenAI budget limit reached")
+
+    def _record_usage(self, *, model: str, prompt_tokens: int, completion_tokens: int, estimated_cost: float) -> None:
+        self.db.add(
+            OpenAIUsage(
+                request_id=str(uuid.uuid4()),
+                model=model,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                estimated_cost=estimated_cost,
+            )
+        )
+        self.db.commit()
+
+    @property
+    def transcription_available(self) -> bool:
+        return bool(self.settings.openai_voice_enabled and self.client)
+
+    @property
+    def tts_available(self) -> bool:
+        return bool(self.settings.openai_tts_enabled and self.client)
 
     async def complete(self, messages: list[dict[str, str]]) -> LLMResponse:
         if not self.settings.openai_enabled:
@@ -62,16 +89,12 @@ class OpenAIProvider(LLMProvider):
         prompt_tokens = result.usage.prompt_tokens if result.usage else 0
         completion_tokens = result.usage.completion_tokens if result.usage else 0
         cost = self._estimate_cost(prompt_tokens, completion_tokens)
-        self.db.add(
-            OpenAIUsage(
-                request_id=str(uuid.uuid4()),
-                model=self.settings.openai_model,
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-                estimated_cost=cost,
-            )
+        self._record_usage(
+            model=self.settings.openai_model,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            estimated_cost=cost,
         )
-        self.db.commit()
         return LLMResponse(
             text=text,
             provider="openai",
@@ -81,3 +104,71 @@ class OpenAIProvider(LLMProvider):
             estimated_cost=cost,
             used_remote_model=True,
         )
+
+    async def transcribe_audio(self, *, filename: str, content_type: str, audio_bytes: bytes) -> tuple[str, float]:
+        """Transcribe one short utterance without retaining the audio on disk."""
+        if not self.transcription_available:
+            raise VoiceUnavailableError("OpenAI voice transcription is not configured")
+
+        reserved_cost = self.settings.ali_voice_max_seconds / 60 * self.settings.openai_transcription_cost_per_minute
+        self._check_budget(reserve_cost=reserved_cost)
+        try:
+            result = await self.client.audio.transcriptions.create(
+                model=self.settings.openai_transcription_model,
+                file=(filename, audio_bytes, content_type),
+                language=self.settings.ali_language,
+                timeout=20,
+            )
+        except (APITimeoutError, APIConnectionError, RateLimitError, AuthenticationError, APIError, httpx.HTTPError) as exc:
+            raise LLMProviderError(exc.__class__.__name__) from exc
+
+        transcript = getattr(result, "text", "")
+        if not isinstance(transcript, str) or not transcript.strip():
+            raise LLMProviderError("empty_transcription")
+
+        # We reserve the maximum request cost. It is deliberately conservative because
+        # browser WebM duration cannot be safely trusted or decoded without extra codecs.
+        self._record_usage(
+            model=self.settings.openai_transcription_model,
+            prompt_tokens=0,
+            completion_tokens=0,
+            estimated_cost=reserved_cost,
+        )
+        return transcript.strip(), reserved_cost
+
+    async def synthesize_speech(self, text: str) -> tuple[bytes, float]:
+        """Generate optional natural speech; browser speech remains the free default."""
+        if not self.tts_available:
+            raise VoiceUnavailableError("OpenAI text-to-speech is not configured")
+
+        safe_text = text.strip()[: self.settings.ali_voice_max_reply_chars]
+        if not safe_text:
+            raise LLMProviderError("empty_speech_input")
+
+        # ALI only speaks short answers. At roughly 150 words/minute this gives a
+        # conservative estimate used solely for the local spending guardrail.
+        estimated_seconds = max(1, ceil(len(safe_text.split()) / 2.5))
+        reserved_cost = estimated_seconds / 60 * self.settings.openai_tts_estimated_cost_per_minute
+        self._check_budget(reserve_cost=reserved_cost)
+        try:
+            response = await self.client.audio.speech.create(
+                model=self.settings.openai_tts_model,
+                voice=self.settings.openai_tts_voice,
+                input=safe_text,
+                instructions="Habla en español de forma cálida, clara y breve.",
+                response_format="mp3",
+                timeout=20,
+            )
+            audio = await response.aread()
+        except (APITimeoutError, APIConnectionError, RateLimitError, AuthenticationError, APIError, httpx.HTTPError) as exc:
+            raise LLMProviderError(exc.__class__.__name__) from exc
+
+        if not audio:
+            raise LLMProviderError("empty_speech_output")
+        self._record_usage(
+            model=self.settings.openai_tts_model,
+            prompt_tokens=0,
+            completion_tokens=0,
+            estimated_cost=reserved_cost,
+        )
+        return audio, reserved_cost
