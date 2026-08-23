@@ -99,8 +99,8 @@ function App() {
   const apiTranscriptionAvailable = Boolean(status?.voice?.transcription_available);
   const apiTtsAvailable = Boolean(status?.voice?.tts_available);
 
-  function euro(value: number | undefined) {
-    return new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR", maximumFractionDigits: 3 }).format(value || 0);
+  function usd(value: number | undefined) {
+    return new Intl.NumberFormat("es-ES", { style: "currency", currency: "USD", maximumFractionDigits: 3 }).format(value || 0);
   }
 
   function speakWithBrowser(text: string) {
@@ -331,7 +331,7 @@ function App() {
     <section className="overview-grid">
       <article className="telemetry panel-glow"><span className="eyebrow">ESTADO AMBIENTAL</span><div className="temp-value"><Thermometer /> <strong>—<sup>°C</sup></strong></div><p>Sin sensor térmico conectado</p><div className="telemetry-row"><Wind size={16} /> Aire acondicionado <b>Sin integrar</b></div><div className="telemetry-row"><CloudSun size={16} /> Clima exterior <b>Pendiente</b></div></article>
       <article className="telemetry panel-glow"><span className="eyebrow">SEGURIDAD PERIMETRAL</span><div className="security-number"><ShieldCheck size={30} /><strong>—</strong></div><p>Puertas y ventanas sin sensores</p><div className="telemetry-row"><DoorOpen size={16} /> Puertas <b>Sin datos</b></div><div className="telemetry-row"><BellRing size={16} /> Alertas <b>0</b></div></article>
-      <article className="telemetry panel-glow"><span className="eyebrow">INTELIGENCIA ALI</span><div className="security-number"><BrainCircuit size={30} /><strong>ALI</strong></div><p>{users.map((user) => user.display_name).join(" · ") || "Perfiles cargando"}</p><div className="telemetry-row"><Radio size={16} /> Voz <b>{apiTtsAvailable ? "Voz fija natural" : apiTranscriptionAvailable ? "API privada" : voiceRooms.length ? "Punto previsto" : "Prueba web"}</b></div><div className="telemetry-row"><Gauge size={16} /> Coste hoy <b>{euro(usage?.daily_spend)}</b></div><div className="telemetry-row"><Gauge size={16} /> Tope mensual <b>{euro(usage?.monthly_limit)}</b></div></article>
+      <article className="telemetry panel-glow"><span className="eyebrow">INTELIGENCIA ALI</span><div className="security-number"><BrainCircuit size={30} /><strong>ALI</strong></div><p>{users.map((user) => user.display_name).join(" · ") || "Perfiles cargando"}</p><div className="telemetry-row"><Radio size={16} /> Voz <b>{apiTtsAvailable ? "Voz fija natural" : apiTranscriptionAvailable ? "API privada" : voiceRooms.length ? "Punto previsto" : "Prueba web"}</b></div><div className="telemetry-row"><Gauge size={16} /> Coste estimado hoy <b>{usd(usage?.daily_spend)}</b></div><div className="telemetry-row"><Gauge size={16} /> Tope mensual <b>{usd(usage?.monthly_limit)}</b></div></article>
     </section>
 
     <section className="home-grid">
