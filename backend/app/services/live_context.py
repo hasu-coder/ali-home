@@ -5,8 +5,10 @@ SPORTS = re.compile(
     r"\b(bar[cç]a|barsa|barcelona|real madrid|madrid|atl[eé]tico|f[uú]tbol|futbol|liga|champions|partido|marcador|gol|goles)\b",
     re.IGNORECASE,
 )
-SPORTS_LIVE = re.compile(
-    r"\b(estoy viendo|estamos viendo|viendo|juega|juegan|jugando|partido|marcador|resultado|cu[aá]nto van|c[oó]mo van|van ganando|van perdiendo|gol)\b",
+SPORTS_LIVE_REQUEST = re.compile(
+    r"\b(c[oó]mo van|cu[aá]nto van|qu[ií]en va ganando|resultado|marcador|"
+    r"en qu[eé] minuto|a qu[eé] hora juega|cu[aá]ndo juega|d[oó]nde (?:lo )?ponen|"
+    r"ha ganado|han ganado|van ganando|van perdiendo)\b",
     re.IGNORECASE,
 )
 WEATHER = re.compile(
@@ -34,13 +36,15 @@ CURRENT_TIME_HINT = re.compile(
 def needs_live_context(text: str) -> bool:
     """Return True only when answering well reasonably requires fresh public data.
 
-    The key example is conversational: "estoy viendo el Barça" should not make
-    ALI ask "¿cómo van?". It should first check the current match if one exists.
+    Casual observations stay conversational. ALI only searches sport results
+    when the person explicitly asks for the score, status, schedule or broadcast.
     """
     cleaned = text.strip()
     if not cleaned:
         return False
-    if SPORTS.search(cleaned) and (SPORTS_LIVE.search(cleaned) or CURRENT_TIME_HINT.search(cleaned)):
+    # A casual observation is conversation, not permission to spend a web lookup.
+    # For example: "estoy viendo el Barça" should receive a short natural reply.
+    if SPORTS.search(cleaned) and SPORTS_LIVE_REQUEST.search(cleaned):
         return True
     if WEATHER.search(cleaned) and CURRENT_TIME_HINT.search(cleaned):
         return True
