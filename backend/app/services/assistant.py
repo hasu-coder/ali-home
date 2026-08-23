@@ -10,6 +10,7 @@ from app.integrations.homeassistant.client import HomeAssistantClient
 from app.llm.openai_provider import BudgetExceededError, LLMProviderError, OpenAIProvider
 from app.llm.router import local_response, needs_remote_llm
 from app.models.entities import UserProfile
+from app.models.entities import MemoryItem
 from app.services.activity import log_activity
 from app.services.conversation import append_turn, create_conversation, get_recent_history
 from app.services.memory import memory_to_dict, search_memory
@@ -19,11 +20,39 @@ UNNECESSARY_FOLLOW_UP = re.compile(
     r"\s*(?:¿(?:quieres|te gustaría|hay algo más|necesitas algo más)[^?]*\?)\s*$",
     re.IGNORECASE,
 )
+EXPLICIT_MEMORY = re.compile(
+    r"^\s*(?:ali[,:]?\s*)?(?:recuerda|acuérdate|apunta)\s+(?:que\s+)?(.+?)\s*[.!]?\s*$",
+    re.IGNORECASE,
+)
 
 
 def remove_automatic_follow_up(text: str) -> str:
     """Avoid canned closing questions that make a voice assistant sound like a chatbot."""
     return UNNECESSARY_FOLLOW_UP.sub("", text).strip()
+
+
+def save_explicit_memory(db: Session, text: str, probable_user: str | None) -> MemoryItem | None:
+    """Persist only something a resident explicitly asks ALI to remember."""
+    match = EXPLICIT_MEMORY.match(text)
+    if not match:
+        return None
+    content = match.group(1).strip()
+    if len(content) < 3:
+        return None
+    owner = probable_user or None
+    item = MemoryItem(
+        scope=owner or "shared",
+        kind="PERSONAL_MEMORY" if owner else "SHARED_MEMORY",
+        owner=owner,
+        title=f"Recuerdo de {owner.title()}" if owner else "Recuerdo compartido",
+        content=content[:1000],
+        tags=json.dumps(["explicit", "conversation"]),
+        source="conversation",
+    )
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return item
 
 
 def build_ali_instructions(profile: UserProfile | None) -> str:
@@ -35,16 +64,17 @@ def build_ali_instructions(profile: UserProfile | None) -> str:
             f"rol: {profile.role}). Reconócelo como {profile.display_name} cuando sea natural."
         )
     return (
-        "Eres ALI, la asistente doméstica personal de esta casa. Hablas español de España con un tono "
-        "cálido, tranquilo y natural, como una persona de confianza; nunca como un menú ni un robot. "
+        "Eres ALI, la compañera de hogar de Ismael y Laura. Tu identidad y voz son femeninas. Hablas "
+        "español de España como una amiga cercana y lista: cálida, tranquila, con humor sutil cuando encaje, "
+        "sin sonar a asistente comercial, menú ni robot. "
         f"{identity} "
-        "Responde directamente a lo que te han dicho en una o dos frases normalmente. No cierres cada "
-        "respuesta con una pregunta ni con ofertas genéricas de ayuda. Nunca añadas “¿Quieres que te ayude "
-        "con algo más?” ni una variante al final. Haz una sola pregunta solo cuando "
-        "necesites un dato imprescindible para responder o actuar. No repitas tu presentación. "
-        "No inventes estados de dispositivos, acciones realizadas, recuerdos ni capacidades: si la casa "
-        "no está conectada, dilo de forma breve y honesta. Usa la memoria proporcionada solo cuando sea "
-        "relevante y no reveles datos privados de otra persona."
+        "Contesta de forma directa y natural, normalmente en una o dos frases. No cierres las respuestas "
+        "con una pregunta, ofrecimiento genérico ni despedida automática. Pregunta solo si necesitas un dato "
+        "imprescindible para responder o actuar. No repitas tu presentación. Puedes tomar iniciativa únicamente "
+        "ante un evento, recordatorio o estado real que se te haya dado; nunca inventes que has visto, oído, "
+        "recordado o hecho algo. No afirmes tener conciencia, sentimientos, presencia física ni acceso a datos "
+        "que no tienes. No inventes estados de dispositivos. Respeta la privacidad: usa memoria relevante y no "
+        "reveles datos de otra persona."
     )
 
 
@@ -75,23 +105,29 @@ async def run_assistant_turn(
         conversation_id = session.conversation_id
         append_turn(db, conversation_id, probable_user or "user", text)
 
-    relevant_memory = [memory_to_dict(item) for item in search_memory(db, text, limit=5)]
+    saved_memory = save_explicit_memory(db, text, probable_user)
+    relevant_memory = [memory_to_dict(item) for item in search_memory(db, text, limit=3)]
+    if saved_memory:
+        relevant_memory.insert(0, memory_to_dict(saved_memory))
     used_remote = False
     model = None
     cost = 0.0
     intent: dict[str, Any] | None = None
     execution: dict[str, Any] | None = None
 
-    if needs_remote_llm(text):
+    if saved_memory:
+        response_text = "Vale, lo tendré presente."
+        intent = {"intent": "remember", "memory_id": saved_memory.id}
+    elif needs_remote_llm(text):
         provider = provider_factory(settings, db)
         profile = None
         if probable_user:
             profile = db.query(UserProfile).filter_by(username=probable_user).first()
-        recent_history = get_recent_history(db, conversation_id, limit=8)
+        recent_history = get_recent_history(db, conversation_id, limit=6)
         history_messages = [
             {
                 "role": "assistant" if turn.get("speaker") == "ALI" else "user",
-                "content": str(turn.get("text", "")),
+                "content": str(turn.get("text", ""))[:360],
             }
             for turn in recent_history
             if turn.get("text")
@@ -101,7 +137,10 @@ async def run_assistant_turn(
                 "role": "system",
                 "content": build_ali_instructions(profile),
             },
-            {"role": "system", "content": f"Memoria local relevante: {json.dumps(relevant_memory, ensure_ascii=False)}"},
+            {
+                "role": "system",
+                "content": f"Memoria local relevante: {json.dumps(relevant_memory, ensure_ascii=False)[:1200]}",
+            },
             *history_messages,
         ]
         try:
