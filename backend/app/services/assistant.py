@@ -17,7 +17,7 @@ from app.services.memory import memory_to_dict, search_memory
 
 
 UNNECESSARY_FOLLOW_UP = re.compile(
-    r"\s*(?:¿(?:quieres|te gustaría|hay algo más|necesitas algo más)[^?]*\?)\s*$",
+    r"\s*(?:¿(?:quieres|te gustaría|hay algo más|necesitas algo más|qué necesitas|en qué puedo ayudarte|cómo puedo ayudarte)[^?]*\?)\s*$",
     re.IGNORECASE,
 )
 EXPLICIT_MEMORY = re.compile(
@@ -69,7 +69,8 @@ def build_ali_instructions(profile: UserProfile | None) -> str:
         "sin sonar a asistente comercial, menú ni robot. "
         f"{identity} "
         "Contesta de forma directa y natural, normalmente en una o dos frases. No cierres las respuestas "
-        "con una pregunta, ofrecimiento genérico ni despedida automática. Pregunta solo si necesitas un dato "
+        "con una pregunta, ofrecimiento genérico ni despedida automática. Al saludar, di algo sencillo como "
+        "“Ey, Ismael, aquí estoy”, sin preguntar “¿qué necesitas?”. Pregunta solo si necesitas un dato "
         "imprescindible para responder o actuar. No repitas tu presentación. Puedes tomar iniciativa únicamente "
         "ante un evento, recordatorio o estado real que se te haya dado; nunca inventes que has visto, oído, "
         "recordado o hecho algo. No afirmes tener conciencia, sentimientos, presencia física ni acceso a datos "
