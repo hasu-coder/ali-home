@@ -49,6 +49,10 @@ Run the external validation checklist:
 Secrets must stay in `.env`, never in Git.
 
 ```env
+ALI_TEXT_PROVIDER=hetzner
+HETZNER_INFERENCE_API_KEY=
+HETZNER_INFERENCE_BASE_URL=https://inference.hetzner.com/api/v1
+HETZNER_INFERENCE_MODEL=Qwen/Qwen3.6-35B-A3B-FP8
 OPENAI_API_KEY=
 OPENAI_MODEL=gpt-4o-mini
 OPENAI_ENABLED=false
@@ -81,7 +85,9 @@ The LLM must not directly control critical hardware. Natural language is convert
 
 ## Local-First Cost Rule
 
-Known commands such as "enciende la cocina", "baja las persianas" and "pon el aire a 22 grados" are handled locally and never call GPT. They are only sent to Home Assistant after their configured entity ID is known; before that, ALI says plainly that the device is not linked.
+Known commands such as "enciende la cocina", "baja las persianas" and "pon el aire a 22 grados" are handled locally and never call a remote model. They are only sent to Home Assistant after their configured entity ID is known; before that, ALI says plainly that the device is not linked.
+
+For normal open conversation, set `ALI_TEXT_PROVIDER=hetzner` and add a Hetzner Inference API token to the backend-only `.env`. Qwen then replaces OpenAI chat with an estimated cost of zero inside ALI. Hetzner's API does not include web search, transcription or text-to-speech, so ALI never claims it has checked current information unless a separate verified data source is configured.
 
 The web interface first uses the browser's speech recognition, so it consumes no OpenAI credit. If that browser feature is unavailable, the optional short-audio transcription endpoint is the compatibility fallback and its estimated OpenAI cost is logged. On the future home mini-PC, both wake-word detection and transcription can be local. OpenAI TTS is called only for open conversations, never for deterministic home-command acknowledgements.
 
