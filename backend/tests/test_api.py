@@ -316,7 +316,7 @@ def test_conversation_session_sends_recent_history_to_llm(monkeypatch):
         assert second.status_code == 200
         contents = [message["content"] for message in captured["messages"]]
         assert any("La persona que habla es Ismael" in content for content in contents)
-        assert any("No cierres cada respuesta con una pregunta" in content for content in contents)
+        assert any("No cierres las respuestas con una pregunta" in content for content in contents)
         assert any("mañana por la mañana" in content for content in contents)
         assert any("por la tarde exactamente" in content for content in contents)
         assert len(captured["messages"]) <= 10
