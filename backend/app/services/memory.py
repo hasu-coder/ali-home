@@ -7,7 +7,11 @@ from app.models.entities import MemoryItem
 
 
 def search_memory(db: Session, query: str, limit: int = 8) -> list[MemoryItem]:
-    terms = [term.strip().lower() for term in query.split() if len(term.strip()) > 2]
+    terms = [
+        term.strip().lower()
+        for term in query.split()
+        if len(term.strip()) > 2 or term.strip().isdigit()
+    ]
     if not terms:
         return []
     filters = []
@@ -32,4 +36,3 @@ def memory_to_dict(item: MemoryItem) -> dict:
         "created_at": item.created_at.isoformat(),
         "expires_at": item.expires_at.isoformat() if item.expires_at else None,
     }
-
