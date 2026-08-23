@@ -26,6 +26,40 @@ EXPLICIT_MEMORY = re.compile(
     re.IGNORECASE,
 )
 
+IDENTITY_QUESTION = re.compile(
+    r"\b(?:sabes|sabe|reconoces|reconoce|identificas|identifica)\s+(?:qui[eé]n\s+soy|mi\s+voz)\b|\bqui[eé]n\s+soy\b",
+    re.IGNORECASE,
+)
+
+
+def asks_for_identity(text: str) -> bool:
+    """Recognise direct identity questions without spending an LLM turn."""
+    return bool(IDENTITY_QUESTION.search(text))
+
+
+def identity_reply(
+    db: Session, probable_user: str | None, *, identity_confirmed: bool
+) -> tuple[str, dict[str, Any]]:
+    """Answer identity questions honestly from the profile or local voiceprint."""
+    profile = None
+    if probable_user:
+        profile = db.query(UserProfile).filter_by(username=probable_user).first()
+    if profile and identity_confirmed:
+        return (
+            f"Sí, eres {profile.display_name}. Te he reconocido por tu voz.",
+            {"intent": "identity", "source": "voiceprint", "confirmed": True},
+        )
+    if profile:
+        return (
+            f"Ahora mismo estás usando el perfil de {profile.display_name}. "
+            "La escucha rápida no me envía el audio necesario para confirmar tu huella de voz.",
+            {"intent": "identity", "source": "session_profile", "confirmed": False},
+        )
+    return (
+        "No puedo asegurarlo todavía: no tengo una coincidencia de voz fiable ni un perfil de sesión.",
+        {"intent": "identity", "source": "unknown", "confirmed": False},
+    )
+
 
 def remove_automatic_follow_up(text: str) -> str:
     """Avoid canned closing questions that make a voice assistant sound like a chatbot."""
@@ -113,6 +147,7 @@ async def run_assistant_turn(
     room_key: str | None = None,
     source: str = "api",
     include_text_in_log: bool = True,
+    identity_confirmed: bool = False,
     provider_factory: Callable[[Settings, Session], OpenAIProvider] = OpenAIProvider,
     home_assistant_factory: Callable[[Settings], HomeAssistantClient] = HomeAssistantClient,
 ) -> dict[str, Any]:
@@ -148,6 +183,10 @@ async def run_assistant_turn(
     if saved_memory:
         response_text = "Vale, lo tendré presente."
         intent = {"intent": "remember", "memory_id": saved_memory.id}
+    elif asks_for_identity(text):
+        response_text, intent = identity_reply(
+            db, probable_user, identity_confirmed=identity_confirmed
+        )
     elif needs_remote_llm(text):
         provider = provider_factory(settings, db)
         profile = None
@@ -245,6 +284,7 @@ async def run_assistant_turn(
             "intent": intent,
             "execution": execution,
             "speech_style": speech_style,
+            "identity_confirmed": identity_confirmed,
         },
     )
     return {
