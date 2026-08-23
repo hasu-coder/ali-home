@@ -10,8 +10,8 @@ from app.services.local_voice import SpeakerMatch, cosine_similarity, normalize_
 client = TestClient(app)
 
 
-def test_live_context_only_searches_sports_when_explicitly_asked():
-    assert needs_live_context("ALI, estoy viendo el Barça") is False
+def test_live_context_verifies_current_sports_claims_without_assuming_them():
+    assert needs_live_context("ALI, estoy viendo el Barça") is True
     assert needs_live_context("¿Cómo van en el partido del Barcelona?") is True
     assert needs_live_context("¿A qué hora juega el Barça?") is True
     assert needs_live_context("Cuéntame la historia del FC Barcelona") is False
