@@ -16,11 +16,13 @@ LOCAL_INTENT_KEYWORDS = {
 
 
 def needs_remote_llm(text: str) -> bool:
-    lowered = text.lower()
+    lowered = text.strip().lower()
+    if not lowered:
+        return False
     if any(keyword in lowered for keyword in LOCAL_INTENT_KEYWORDS):
         return False
-    if len(lowered.split()) <= 5:
-        return False
+    # Natural conversation can be short ("¿qué puedes hacer?"). Only known
+    # deterministic home intents bypass the LLM, so ALI does not sound stuck.
     return True
 
 
