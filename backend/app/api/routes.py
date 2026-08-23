@@ -12,6 +12,7 @@ from app.core.config import Settings, get_settings
 from app.db.session import get_db
 from app.integrations.homeassistant.client import HomeAssistantClient
 from app.llm.openai_provider import BudgetExceededError, LLMProviderError, OpenAIProvider, VoiceUnavailableError
+from app.llm.text_provider import get_text_provider
 from app.models.entities import ActivityLog, ConversationSession, MemoryItem, OpenAIUsage, Pet, Room, UserProfile, VoiceProfile
 from app.services.activity import log_activity
 from app.services.assistant import run_assistant_turn
@@ -127,6 +128,14 @@ async def status(db: Session = Depends(get_db), settings: Settings = Depends(get
             "configured": bool(settings.openai_api_key),
             "live_context_enabled": settings.openai_live_context_enabled,
         },
+        "text_provider": {
+            "name": settings.ali_text_provider,
+            "configured": (
+                bool(settings.hetzner_inference_api_key)
+                if settings.ali_text_provider.strip().lower() == "hetzner"
+                else bool(settings.openai_api_key)
+            ),
+        },
         "voice": local_voice_status(settings),
         "home_assistant": home_assistant,
     }
@@ -139,6 +148,7 @@ def public_config(settings: Settings = Depends(get_settings)) -> dict:
         "wake_word": settings.ali_wake_word,
         "language": settings.ali_language,
         "openai_enabled": settings.openai_enabled,
+        "text_provider": settings.ali_text_provider,
         "openai_monthly_limit": settings.openai_monthly_limit,
         "openai_soft_monthly_warning": settings.openai_soft_monthly_warning,
         "live_context_enabled": settings.openai_live_context_enabled,
@@ -277,7 +287,7 @@ async def ask(payload: AskRequest, db: Session = Depends(get_db), settings: Sett
         probable_user=payload.probable_user,
         room_key=payload.room_key,
         source="api",
-        provider_factory=OpenAIProvider,
+        provider_factory=get_text_provider,
         home_assistant_factory=HomeAssistantClient,
     )
 
@@ -422,7 +432,7 @@ async def voice_turn(
         source="voice",
         include_text_in_log=False,
         identity_confirmed=speaker_identified,
-        provider_factory=OpenAIProvider,
+        provider_factory=get_text_provider,
         home_assistant_factory=HomeAssistantClient,
     )
     log_activity(
