@@ -110,6 +110,18 @@ def test_ali_removes_canned_closing_questions():
     assert remove_automatic_follow_up("Necesito saber la habitación. ¿En cuál estás?") == "Necesito saber la habitación. ¿En cuál estás?"
 
 
+def test_transcription_estimate_uses_measured_duration_not_the_maximum():
+    settings = get_settings()
+    provider = OpenAIProvider(settings, SessionLocal())
+    try:
+        short_clip = provider.transcription_cost_for_seconds(1.0)
+        maximum_clip = provider.transcription_cost_for_seconds(settings.ali_voice_max_seconds)
+        assert short_clip < maximum_clip
+        assert short_clip == settings.openai_transcription_cost_per_minute / 60
+    finally:
+        provider.db.close()
+
+
 def test_conversation_session_is_created_and_reused(monkeypatch):
     FakeHomeAssistantClient.calls = []
     FakeHomeAssistantClient.result = FakeHAResult(success=True, verified=True, state="on")
@@ -167,6 +179,18 @@ def test_memory_remember_search_list_and_forget():
     deleted = client.delete(f"/api/memory/{memory_id}")
     assert deleted.status_code == 200
     assert deleted.json()["status"] == "deleted"
+
+
+def test_ali_saves_only_explicitly_requested_memories():
+    response = client.post(
+        "/api/ask",
+        json={"text": "ALI, recuerda que prefiero el salón a 21 grados", "probable_user": "ismael"},
+    )
+    assert response.status_code == 200
+    assert response.json()["response"] == "Vale, lo tendré presente."
+    assert response.json()["intent"]["intent"] == "remember"
+    memories = client.get("/api/memory?q=salón").json()
+    assert any(item["owner"] == "ismael" and "21 grados" in item["content"] for item in memories)
 
 
 def test_activity_log_has_required_shape():
@@ -423,7 +447,7 @@ def test_voice_turn_uses_the_same_local_command_path_and_withholds_transcript(mo
         def __init__(self, settings, db):
             pass
 
-        async def transcribe_audio(self, *, filename, content_type, audio_bytes):
+        async def transcribe_audio(self, *, filename, content_type, audio_bytes, duration_seconds=None):
             assert filename == "voice.webm"
             assert content_type == "audio/webm"
             assert audio_bytes == b"short-audio"
