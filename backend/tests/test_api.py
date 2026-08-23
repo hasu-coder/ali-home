@@ -3,7 +3,9 @@ from fastapi.testclient import TestClient
 from app.core.config import get_settings
 from app.db.session import SessionLocal
 from app.llm.provider import LLMResponse
+from app.llm.hetzner_provider import HetznerProvider
 from app.llm.openai_provider import BudgetExceededError, OpenAIProvider
+from app.llm.text_provider import get_text_provider
 from app.llm.router import needs_remote_llm
 from app.main import app
 from app.services.assistant import remove_automatic_follow_up
@@ -255,6 +257,21 @@ def test_openai_enabled_default_is_false():
     assert get_settings().openai_enabled is False
 
 
+def test_hetzner_is_the_default_text_provider_without_an_openai_key():
+    settings = get_settings()
+    original_provider = settings.ali_text_provider
+    original_key = settings.hetzner_inference_api_key
+    db = SessionLocal()
+    settings.ali_text_provider = "hetzner"
+    settings.hetzner_inference_api_key = "test-hetzner-token"
+    try:
+        assert isinstance(get_text_provider(settings, db), HetznerProvider)
+    finally:
+        db.close()
+        settings.ali_text_provider = original_provider
+        settings.hetzner_inference_api_key = original_key
+
+
 def test_openai_provider_error_falls_back_to_local(monkeypatch):
     class FailingProvider:
         def __init__(self, settings, db):
@@ -268,7 +285,7 @@ def test_openai_provider_error_falls_back_to_local(monkeypatch):
     settings = get_settings()
     original_enabled = settings.openai_enabled
     settings.openai_enabled = True
-    monkeypatch.setattr("app.api.routes.OpenAIProvider", FailingProvider)
+    monkeypatch.setattr("app.api.routes.get_text_provider", FailingProvider)
     try:
         response = client.post(
             "/api/ask",
@@ -295,7 +312,7 @@ def test_openai_budget_limit_keeps_local_home_control_working(monkeypatch):
     settings = get_settings()
     original_enabled = settings.openai_enabled
     settings.openai_enabled = True
-    monkeypatch.setattr("app.api.routes.OpenAIProvider", BudgetProvider)
+    monkeypatch.setattr("app.api.routes.get_text_provider", BudgetProvider)
     monkeypatch.setattr("app.api.routes.HomeAssistantClient", FakeHomeAssistantClient)
     try:
         remote = client.post(
@@ -331,7 +348,7 @@ def test_conversation_session_sends_recent_history_to_llm(monkeypatch):
     settings = get_settings()
     original_enabled = settings.openai_enabled
     settings.openai_enabled = True
-    monkeypatch.setattr("app.api.routes.OpenAIProvider", CapturingProvider)
+    monkeypatch.setattr("app.api.routes.get_text_provider", CapturingProvider)
     try:
         first = client.post(
             "/api/ask",
