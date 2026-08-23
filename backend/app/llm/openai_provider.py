@@ -166,9 +166,9 @@ class OpenAIProvider(LLMProvider):
         if not safe_text:
             raise LLMProviderError("empty_speech_input")
 
-        # ALI only speaks short answers. At roughly 150 words/minute this gives a
+        # ALI only speaks short answers. At roughly 180 words/minute this gives a
         # conservative estimate used solely for the local spending guardrail.
-        estimated_seconds = max(1, ceil(len(safe_text.split()) / 2.5))
+        estimated_seconds = max(1, ceil(len(safe_text.split()) / 3))
         reserved_cost = estimated_seconds / 60 * self.settings.openai_tts_estimated_cost_per_minute
         self._check_budget(reserve_cost=reserved_cost)
         try:
@@ -178,10 +178,12 @@ class OpenAIProvider(LLMProvider):
                 input=safe_text,
                 instructions=(
                     "Eres la voz fija de ALI, la compañera de hogar de Ismael y Laura. Habla en español "
-                    "de España con una voz femenina, cálida y natural: ritmo conversacional, serena, "
-                    "cercana y nada robótica. No dramatices ni uses tono de locutora."
+                    "de España con una voz femenina, cálida y natural. Mantén un ritmo ágil y cercano, "
+                    "con pausas breves y frases vivas; no hables lento. Nada de tono robótico, dramático "
+                    "ni de locutora."
                 ),
                 response_format="mp3",
+                speed=self.settings.openai_tts_speed,
                 timeout=20,
             )
             audio = await response.aread()
