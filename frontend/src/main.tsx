@@ -169,7 +169,11 @@ function App() {
         await audio.play();
         return;
       } catch (error) {
-        console.warn("ALI TTS unavailable; using browser voice", error);
+        // Do not replace ALI's fixed voice with a different system voice midway
+        // through a conversation. The written reply remains available instead.
+        console.warn("ALI fixed TTS unavailable", error);
+        setVoiceNotice("La voz fija de ALI está pausada por el límite de uso. Te dejo la respuesta en pantalla.");
+        return;
       }
     }
     speakWithBrowser(text, style);
