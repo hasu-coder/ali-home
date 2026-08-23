@@ -15,6 +15,10 @@ class Settings(BaseSettings):
     home_assistant_url: str = "http://homeassistant.local:8123"
     home_assistant_token: str = ""
     home_assistant_enabled: bool = False
+    # Leave these empty until the real entity IDs are known. This prevents ALI
+    # from guessing an entity and claiming that a physical action was carried out.
+    home_assistant_cover_entity_id: str = ""
+    home_assistant_climate_entity_id: str = ""
 
     openai_api_key: str = ""
     # Everyday conversation is deliberately inexpensive. Harder tasks can be
@@ -35,6 +39,7 @@ class Settings(BaseSettings):
     openai_tts_enabled: bool = False
     openai_tts_model: str = "gpt-4o-mini-tts"
     openai_tts_voice: str = "coral"
+    openai_tts_speed: float = Field(default=1.2, ge=0.25, le=4.0)
     openai_tts_estimated_cost_per_minute: float = Field(default=0.015, ge=0)
     ali_voice_max_bytes: int = Field(default=4_000_000, ge=100_000, le=25_000_000)
     ali_voice_max_seconds: int = Field(default=8, ge=1, le=120)
