@@ -47,6 +47,7 @@ class AskRequest(BaseModel):
 
 class SpeechRequest(BaseModel):
     text: str = Field(min_length=1, max_length=480)
+    style: str = Field(default="normal", pattern="^(normal|soft|whisper)$")
 
 
 SUPPORTED_VOICE_CONTENT_TYPES = {
@@ -334,7 +335,7 @@ async def voice_speech(
     """Optional premium TTS. It is disabled by default; browser speech costs nothing."""
     provider = OpenAIProvider(settings, db)
     try:
-        audio, estimated_cost = await provider.synthesize_speech(payload.text)
+        audio, estimated_cost = await provider.synthesize_speech(payload.text, style=payload.style)
     except VoiceUnavailableError:
         raise HTTPException(status_code=503, detail="voice_synthesis_unavailable") from None
     except BudgetExceededError:
@@ -352,7 +353,7 @@ async def voice_speech(
         llm_used=True,
         model=settings.openai_tts_model,
         estimated_cost=estimated_cost,
-        details={"characters": len(payload.text), "text_retained": False},
+        details={"characters": len(payload.text), "text_retained": False, "style": payload.style},
     )
     return Response(content=audio, media_type="audio/mpeg", headers={"Cache-Control": "no-store"})
 
@@ -385,6 +386,7 @@ def openai_usage(db: Session = Depends(get_db), settings: Settings = Depends(get
 @router.get("/integrations/homeassistant/health")
 async def homeassistant_health(settings: Settings = Depends(get_settings)) -> dict:
     return await HomeAssistantClient(settings).health()
+
 
 @router.get("/integrations/homeassistant/states/{entity_id}")
 async def homeassistant_state(entity_id: str, settings: Settings = Depends(get_settings)) -> dict:
