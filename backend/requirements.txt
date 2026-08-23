@@ -8,4 +8,5 @@ openai==1.101.0
 python-multipart==0.0.20
 pytest==8.4.1
 faster-whisper==1.2.0
-speechbrain==1.0.3
+speechbrain==1.1.0
+huggingface_hub>=0.28,<1.0
