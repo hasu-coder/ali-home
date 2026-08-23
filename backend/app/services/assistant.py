@@ -7,7 +7,9 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.integrations.homeassistant.client import HomeAssistantClient
-from app.llm.openai_provider import BudgetExceededError, LLMProviderError, OpenAIProvider
+from app.llm.openai_provider import BudgetExceededError, LLMProviderError
+from app.llm.provider import LLMProvider
+from app.llm.text_provider import get_text_provider
 from app.llm.router import local_response, needs_remote_llm
 from app.models.entities import ConversationSession, MemoryItem, UserProfile
 from app.services.activity import log_activity
@@ -151,7 +153,7 @@ async def run_assistant_turn(
     source: str = "api",
     include_text_in_log: bool = True,
     identity_confirmed: bool = False,
-    provider_factory: Callable[[Settings, Session], OpenAIProvider] = OpenAIProvider,
+    provider_factory: Callable[[Settings, Session], LLMProvider] = get_text_provider,
     home_assistant_factory: Callable[[Settings], HomeAssistantClient] = HomeAssistantClient,
 ) -> dict[str, Any]:
     """Run the single ALI command path used by both typed and spoken requests."""
@@ -218,15 +220,32 @@ async def run_assistant_turn(
             messages.append({"role": "system", "content": live_context_instruction(text)})
         messages.extend(history_messages)
         try:
-            if current_info_needed:
-                llm_response = await provider.complete_with_web(messages)
-                live_context_used = llm_response.used_remote_model
+            # Hetzner's Qwen endpoint is text/vision only: never pretend that it
+            # searched the web. A real live-data adapter can be added separately.
+            can_use_openai_web = (
+                settings.ali_text_provider.strip().lower() == "openai"
+                and callable(getattr(provider, "complete_with_web", None))
+            )
+            if current_info_needed and not can_use_openai_web:
+                response_text = (
+                    "No voy a inventarte ese dato: aún no tengo una fuente web "
+                    "verificable conectada para comprobarlo en directo."
+                )
+                model = (
+                    settings.hetzner_inference_model
+                    if settings.ali_text_provider.strip().lower() == "hetzner"
+                    else settings.openai_model
+                )
             else:
-                llm_response = await provider.complete(messages)
-            response_text = remove_automatic_follow_up(llm_response.text)
-            used_remote = llm_response.used_remote_model
-            cost = llm_response.estimated_cost
-            model = llm_response.model
+                if current_info_needed:
+                    llm_response = await provider.complete_with_web(messages)
+                    live_context_used = llm_response.used_remote_model
+                else:
+                    llm_response = await provider.complete(messages)
+                response_text = remove_automatic_follow_up(llm_response.text)
+                used_remote = llm_response.used_remote_model
+                cost = llm_response.estimated_cost
+                model = llm_response.model
         except BudgetExceededError:
             response_text = (
                 "He alcanzado el límite temporal de conversaciones online. "
@@ -237,8 +256,12 @@ async def run_assistant_turn(
             if current_info_needed:
                 response_text = "Ahora mismo no consigo comprobar ese dato en directo y prefiero no inventármelo."
             else:
-                response_text = "Ahora mismo estoy funcionando en modo local."
-            model = settings.openai_model
+                response_text = "Ahora mismo no consigo contactar con la IA configurada."
+            model = (
+                settings.hetzner_inference_model
+                if settings.ali_text_provider.strip().lower() == "hetzner"
+                else settings.openai_model
+            )
     else:
         local = local_response(text)
         entity_setting = local.get("entity_setting")
