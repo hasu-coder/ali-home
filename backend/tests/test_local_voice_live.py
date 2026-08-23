@@ -54,8 +54,10 @@ def test_live_context_turn_uses_web_capable_provider(monkeypatch):
 
     settings = get_settings()
     previous = settings.openai_enabled
+    previous_provider = settings.ali_text_provider
     settings.openai_enabled = True
-    monkeypatch.setattr("app.api.routes.OpenAIProvider", FakeLiveProvider)
+    settings.ali_text_provider = "openai"
+    monkeypatch.setattr("app.api.routes.get_text_provider", FakeLiveProvider)
     try:
         response = client.post(
             "/api/ask",
@@ -68,6 +70,7 @@ def test_live_context_turn_uses_web_capable_provider(monkeypatch):
         assert captured["normal"] == 0
     finally:
         settings.openai_enabled = previous
+        settings.ali_text_provider = previous_provider
 
 
 def test_voice_turn_prefers_detected_speaker_over_manual_fallback(monkeypatch):
