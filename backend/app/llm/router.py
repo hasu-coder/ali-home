@@ -13,6 +13,15 @@ def needs_remote_llm(text: str) -> bool:
     return local_response(text).get("intent") == "local_conversation"
 
 
+def _contains_command_word(text: str, words: tuple[str, ...]) -> bool:
+    """Match complete command words, never fragments inside conversational verbs.
+
+    Example: "ALI, te voy a apagar" must not be interpreted as the imperative
+    home-control command "apaga" merely because "apagar" starts with "apaga".
+    """
+    return any(re.search(rf"\b{re.escape(word)}\b", text) for word in words)
+
+
 def local_response(text: str) -> dict:
     lowered = text.lower()
     air_words = ("aire acondicionado", "climatización", "calefacción", "aire", " ac ")
@@ -25,7 +34,7 @@ def local_response(text: str) -> dict:
             "requires_execution": True,
             "domain": "cover",
         }
-        if any(word in lowered for word in ("baja", "bajar", "cierra", "cerrar")):
+        if _contains_command_word(lowered, ("baja", "bajar", "cierra", "cerrar")):
             return {
                 **base,
                 "intent": "close_blinds",
@@ -34,7 +43,7 @@ def local_response(text: str) -> dict:
                 "service": "close_cover",
                 "verify_state": "closed",
             }
-        if any(word in lowered for word in ("sube", "subir", "abre", "abrir")):
+        if _contains_command_word(lowered, ("sube", "subir", "abre", "abrir")):
             return {
                 **base,
                 "intent": "open_blinds",
@@ -56,7 +65,7 @@ def local_response(text: str) -> dict:
             "requires_execution": True,
             "domain": "climate",
         }
-        if any(word in lowered for word in ("apaga", "apagar", "para", "parar", "desconecta")):
+        if _contains_command_word(lowered, ("apaga", "apagar", "para", "parar", "desconecta")):
             return {
                 **base,
                 "intent": "turn_off_climate",
@@ -65,7 +74,7 @@ def local_response(text: str) -> dict:
                 "service": "turn_off",
             }
         target_temperature = re.search(r"\b(1[6-9]|2[0-9]|30)\s*(?:º|°|grados?)?\b", lowered)
-        if target_temperature and any(word in lowered for word in ("pon", "poner", "ajusta", "ajustar", "temperatura")):
+        if target_temperature and _contains_command_word(lowered, ("pon", "poner", "ajusta", "ajustar", "temperatura")):
             degrees = int(target_temperature.group(1))
             return {
                 **base,
@@ -75,7 +84,7 @@ def local_response(text: str) -> dict:
                 "service": "set_temperature",
                 "service_data": {"temperature": degrees},
             }
-        if any(word in lowered for word in ("enciende", "encender", "pon", "poner", "activa", "activar")):
+        if _contains_command_word(lowered, ("enciende", "encender", "pon", "poner", "activa", "activar")):
             return {
                 **base,
                 "intent": "turn_on_climate",
@@ -122,7 +131,7 @@ def local_response(text: str) -> dict:
             "service": "turn_on",
             "entity_id": "script.activate_night_mode",
         }
-    if "enciende" in lowered and "cocina" in lowered:
+    if _contains_command_word(lowered, ("enciende",)) and "cocina" in lowered:
         return {
             "intent": "set_room_lighting",
             "room": "cocina_salon",
@@ -136,7 +145,7 @@ def local_response(text: str) -> dict:
             "entity_id": "light.cocina_salon",
             "verify_state": "on",
         }
-    if "apaga" in lowered:
+    if _contains_command_word(lowered, ("apaga",)):
         room = None
         entity_id = "all"
         failure_response = "No he podido apagar las luces."
