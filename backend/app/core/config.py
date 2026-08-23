@@ -35,6 +35,13 @@ class Settings(BaseSettings):
     openai_output_cost_per_1m: float = Field(default=0.60, ge=0)
     openai_max_output_tokens: int = Field(default=120, ge=16, le=1024)
 
+    # Normal conversation can use Hetzner's OpenAI-compatible Qwen endpoint
+    # without sending the key to the browser or applying OpenAI spend limits.
+    ali_text_provider: str = "hetzner"
+    hetzner_inference_api_key: str = ""
+    hetzner_inference_base_url: str = "https://inference.hetzner.com/api/v1"
+    hetzner_inference_model: str = "Qwen/Qwen3.6-35B-A3B-FP8"
+
     # Current information is opt-in and only invoked when the utterance implies
     # fresh data (live sport, weather, news, traffic, prices, etc.).
     openai_live_context_enabled: bool = True
