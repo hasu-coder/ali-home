@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { createRoot } from "react-dom/client";
 import {
   Activity, AirVent, BellRing, BrainCircuit, Cat, ChevronRight, CloudSun, DoorOpen,
   Flame, Gauge, Lightbulb, Mic, MicOff, Radio, ShieldCheck, Sparkles, Thermometer,
