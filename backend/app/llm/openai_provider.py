@@ -82,7 +82,12 @@ class OpenAIProvider(LLMProvider):
 
         self._check_budget()
         try:
-            result = await self.client.chat.completions.create(model=self.settings.openai_model, messages=messages, timeout=20)
+            result = await self.client.chat.completions.create(
+                model=self.settings.openai_model,
+                messages=messages,
+                max_tokens=self.settings.openai_max_output_tokens,
+                timeout=20,
+            )
         except (APITimeoutError, APIConnectionError, RateLimitError, AuthenticationError, APIError, httpx.HTTPError) as exc:
             raise LLMProviderError(exc.__class__.__name__) from exc
         text = result.choices[0].message.content or ""
@@ -105,13 +110,29 @@ class OpenAIProvider(LLMProvider):
             used_remote_model=True,
         )
 
-    async def transcribe_audio(self, *, filename: str, content_type: str, audio_bytes: bytes) -> tuple[str, float]:
+    def transcription_cost_for_seconds(self, duration_seconds: float | None) -> float:
+        """Estimate a clip by its measured client duration, never a fixed 20-second block."""
+        seconds = duration_seconds if duration_seconds is not None else self.settings.ali_voice_max_seconds
+        seconds = min(float(self.settings.ali_voice_max_seconds), max(0.25, float(seconds)))
+        return seconds / 60 * self.settings.openai_transcription_cost_per_minute
+
+    async def transcribe_audio(
+        self,
+        *,
+        filename: str,
+        content_type: str,
+        audio_bytes: bytes,
+        duration_seconds: float | None = None,
+    ) -> tuple[str, float]:
         """Transcribe one short utterance without retaining the audio on disk."""
         if not self.transcription_available:
             raise VoiceUnavailableError("OpenAI voice transcription is not configured")
 
-        reserved_cost = self.settings.ali_voice_max_seconds / 60 * self.settings.openai_transcription_cost_per_minute
-        self._check_budget(reserve_cost=reserved_cost)
+        # Reserve the maximum before the external call so a long clip cannot
+        # exceed the guardrail. Record the measured duration afterwards so the
+        # UI does not report every short phrase as a full-length recording.
+        maximum_cost = self.transcription_cost_for_seconds(self.settings.ali_voice_max_seconds)
+        self._check_budget(reserve_cost=maximum_cost)
         try:
             result = await self.client.audio.transcriptions.create(
                 model=self.settings.openai_transcription_model,
@@ -132,9 +153,9 @@ class OpenAIProvider(LLMProvider):
             model=self.settings.openai_transcription_model,
             prompt_tokens=0,
             completion_tokens=0,
-            estimated_cost=reserved_cost,
+            estimated_cost=self.transcription_cost_for_seconds(duration_seconds),
         )
-        return transcript.strip(), reserved_cost
+        return transcript.strip(), self.transcription_cost_for_seconds(duration_seconds)
 
     async def synthesize_speech(self, text: str) -> tuple[bytes, float]:
         """Generate optional natural speech; browser speech remains the free default."""
@@ -155,7 +176,11 @@ class OpenAIProvider(LLMProvider):
                 model=self.settings.openai_tts_model,
                 voice=self.settings.openai_tts_voice,
                 input=safe_text,
-                instructions="Habla en español de forma cálida, clara y breve.",
+                instructions=(
+                    "Eres la voz fija de ALI, la compañera de hogar de Ismael y Laura. Habla en español "
+                    "de España con una voz femenina, cálida y natural: ritmo conversacional, serena, "
+                    "cercana y nada robótica. No dramatices ni uses tono de locutora."
+                ),
                 response_format="mp3",
                 timeout=20,
             )
