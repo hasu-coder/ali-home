@@ -25,6 +25,18 @@ class Settings(BaseSettings):
     openai_input_cost_per_1m: float = Field(default=0.40, ge=0)
     openai_output_cost_per_1m: float = Field(default=1.60, ge=0)
 
+    # Voice is intentionally opt-in. The browser never receives the API key.
+    openai_voice_enabled: bool = False
+    openai_transcription_model: str = "gpt-4o-mini-transcribe"
+    openai_transcription_cost_per_minute: float = Field(default=0.003, ge=0)
+    openai_tts_enabled: bool = False
+    openai_tts_model: str = "gpt-4o-mini-tts"
+    openai_tts_voice: str = "coral"
+    openai_tts_estimated_cost_per_minute: float = Field(default=0.015, ge=0)
+    ali_voice_max_bytes: int = Field(default=4_000_000, ge=100_000, le=25_000_000)
+    ali_voice_max_seconds: int = Field(default=20, ge=1, le=120)
+    ali_voice_max_reply_chars: int = Field(default=480, ge=50, le=4096)
+
     ali_wake_word: str = "ALI"
     ali_language: str = "es"
 
