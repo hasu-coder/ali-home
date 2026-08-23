@@ -128,9 +128,6 @@ class OpenAIProvider(LLMProvider):
         if not self.transcription_available:
             raise VoiceUnavailableError("OpenAI voice transcription is not configured")
 
-        # Reserve the maximum before the external call so a long clip cannot
-        # exceed the guardrail. Record the measured duration afterwards so the
-        # UI does not report every short phrase as a full-length recording.
         maximum_cost = self.transcription_cost_for_seconds(self.settings.ali_voice_max_seconds)
         self._check_budget(reserve_cost=maximum_cost)
         try:
@@ -147,8 +144,6 @@ class OpenAIProvider(LLMProvider):
         if not isinstance(transcript, str) or not transcript.strip():
             raise LLMProviderError("empty_transcription")
 
-        # We reserve the maximum request cost. It is deliberately conservative because
-        # browser WebM duration cannot be safely trusted or decoded without extra codecs.
         self._record_usage(
             model=self.settings.openai_transcription_model,
             prompt_tokens=0,
@@ -157,7 +152,7 @@ class OpenAIProvider(LLMProvider):
         )
         return transcript.strip(), self.transcription_cost_for_seconds(duration_seconds)
 
-    async def synthesize_speech(self, text: str) -> tuple[bytes, float]:
+    async def synthesize_speech(self, text: str, style: str = "normal") -> tuple[bytes, float]:
         """Generate optional natural speech; browser speech remains the free default."""
         if not self.tts_available:
             raise VoiceUnavailableError("OpenAI text-to-speech is not configured")
@@ -166,8 +161,13 @@ class OpenAIProvider(LLMProvider):
         if not safe_text:
             raise LLMProviderError("empty_speech_input")
 
-        # ALI only speaks short answers. At roughly 180 words/minute this gives a
-        # conservative estimate used solely for the local spending guardrail.
+        style = style if style in {"normal", "soft", "whisper"} else "normal"
+        style_instruction = {
+            "normal": "Habla con un volumen normal y una energía cercana.",
+            "soft": "Habla suave, cálida y discretamente, como si hubiera alguien descansando cerca.",
+            "whisper": "Habla en un susurro claro y natural, muy bajo y calmado, sin dramatizar.",
+        }[style]
+
         estimated_seconds = max(1, ceil(len(safe_text.split()) / 3))
         reserved_cost = estimated_seconds / 60 * self.settings.openai_tts_estimated_cost_per_minute
         self._check_budget(reserve_cost=reserved_cost)
@@ -177,10 +177,10 @@ class OpenAIProvider(LLMProvider):
                 voice=self.settings.openai_tts_voice,
                 input=safe_text,
                 instructions=(
-                    "Eres la voz fija de ALI, la compañera de hogar de Ismael y Laura. Habla en español "
-                    "de España con una voz femenina, cálida y natural. Mantén un ritmo ágil y cercano, "
-                    "con pausas breves y frases vivas; no hables lento. Nada de tono robótico, dramático "
-                    "ni de locutora."
+                    "Eres la voz fija de ALI, la compañera digital de hogar de Ismael y Laura. Habla en español "
+                    "de España con una voz femenina, cálida, inteligente y natural. Mantén un ritmo ágil y cercano, "
+                    "con pausas breves y frases vivas. Nada de tono robótico, dramático ni de locutora. "
+                    f"{style_instruction}"
                 ),
                 response_format="mp3",
                 speed=self.settings.openai_tts_speed,
