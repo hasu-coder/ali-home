@@ -94,14 +94,21 @@ class LocalVoiceEngine:
         source = self.settings.ali_speaker_model
         with self._model_lock:
             if source not in self._speaker_models:
-                from speechbrain.inference.classifiers import EncoderClassifier
+                try:
+                    # This is the model-specific public SpeechBrain import for
+                    # spkrec-ecapa-voxceleb, rather than the generic classifier.
+                    from speechbrain.inference.speaker import EncoderClassifier
 
-                savedir = Path(self.settings.ali_voice_model_cache) / "speaker-ecapa"
-                self._speaker_models[source] = EncoderClassifier.from_hparams(
-                    source=source,
-                    savedir=str(savedir),
-                    run_opts={"device": "cpu"},
-                )
+                    savedir = Path(self.settings.ali_voice_model_cache) / "speaker-ecapa"
+                    self._speaker_models[source] = EncoderClassifier.from_hparams(
+                        source=source,
+                        savedir=str(savedir),
+                        run_opts={"device": "cpu"},
+                    )
+                except Exception as exc:
+                    raise LocalVoiceUnavailableError(
+                        f"speaker_model_load_failed:{exc.__class__.__name__}"
+                    ) from None
         return self._speaker_models[source]
 
     def transcribe(self, audio_bytes: bytes) -> str:
