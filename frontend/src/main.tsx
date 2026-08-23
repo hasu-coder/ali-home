@@ -12,7 +12,7 @@ type UserProfile = { username: string; display_name: string; role: string };
 type Room = { key: string; name: string; floor: string; has_voice_point: boolean };
 type Pet = { key: string; name: string; species: string; home_state: string; last_known_room?: string | null };
 type ActivityItem = { id: number; event_type: string; summary: string; actor?: string; level: number; created_at: string };
-type Usage = { daily_spend: number; monthly_spend: number; daily_limit: number; monthly_limit: number; enabled: boolean };
+type Usage = { daily_spend: number; monthly_spend: number; daily_limit: number; monthly_limit: number; enabled: boolean; monthly_by_model?: Record<string, number> };
 type VoiceStatus = { transcription_available: boolean; tts_available: boolean; max_seconds: number; transcription_model: string };
 type Status = {
   status: string;
@@ -41,8 +41,6 @@ type SpeechRecognitionLike = {
   start: () => void;
   stop: () => void;
 };
-
-type BrowserVoice = { name: string; lang: string; localService: boolean };
 
 declare global {
   interface Window {
@@ -76,11 +74,11 @@ function App() {
   const [isVoiceProcessing, setIsVoiceProcessing] = useState(false);
   const [voiceNotice, setVoiceNotice] = useState("Pulsa y mantén para hablar con ALI");
   const [latency, setLatency] = useState<number | null>(null);
-  const [browserVoices, setBrowserVoices] = useState<BrowserVoice[]>([]);
-  const [selectedVoice, setSelectedVoice] = useState(() => localStorage.getItem("ali-browser-voice") || "");
   const recognition = useRef<SpeechRecognitionLike | null>(null);
   const recorder = useRef<MediaRecorder | null>(null);
   const recordingStream = useRef<MediaStream | null>(null);
+  const recordingStartedAt = useRef<number | null>(null);
+  const recordingTimeout = useRef<number | null>(null);
 
   async function refresh() {
     const [nextStatus, nextUsers, nextRooms, nextPets, nextActivity, nextUsage] = await Promise.all([
@@ -96,32 +94,20 @@ function App() {
   }
 
   useEffect(() => { refresh().catch(console.error); }, []);
-  useEffect(() => {
-    if (!("speechSynthesis" in window)) return;
-    const loadVoices = () => {
-      const spanish = window.speechSynthesis.getVoices()
-        .filter((voice) => voice.lang.toLowerCase().startsWith("es"))
-        .map((voice) => ({ name: voice.name, lang: voice.lang, localService: voice.localService }));
-      setBrowserVoices(spanish);
-      if (!selectedVoice && spanish[0]) setSelectedVoice(spanish[0].name);
-    };
-    loadVoices();
-    window.speechSynthesis.addEventListener("voiceschanged", loadVoices);
-    return () => window.speechSynthesis.removeEventListener("voiceschanged", loadVoices);
-  }, [selectedVoice]);
-  useEffect(() => { if (selectedVoice) localStorage.setItem("ali-browser-voice", selectedVoice); }, [selectedVoice]);
   const selected = rooms.find((room) => room.key === selectedRoom);
   const voiceRooms = useMemo(() => rooms.filter((room) => room.has_voice_point), [rooms]);
   const apiTranscriptionAvailable = Boolean(status?.voice?.transcription_available);
   const apiTtsAvailable = Boolean(status?.voice?.tts_available);
+
+  function euro(value: number | undefined) {
+    return new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR", maximumFractionDigits: 3 }).format(value || 0);
+  }
 
   function speakWithBrowser(text: string) {
     if (!("speechSynthesis" in window)) return;
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.lang = "es-ES";
-    const selected = window.speechSynthesis.getVoices().find((voice) => voice.name === selectedVoice);
-    if (selected) utterance.voice = selected;
     utterance.rate = 1.0;
     utterance.pitch = 1.0;
     window.speechSynthesis.speak(utterance);
@@ -148,7 +134,7 @@ function App() {
     setLatency(elapsed);
     setReply(result.response);
     setVoiceNotice(`ALI respondió por ${source} en ${elapsed} ms · ${result.used_remote_llm ? "modelo remoto" : "modo local"}`);
-    void speakReply(result.response);
+    if (source === "voz") void speakReply(result.response);
     refresh().catch(console.error);
   }
 
@@ -198,7 +184,7 @@ function App() {
     }
   }
 
-  async function sendVoiceRecording(audio: Blob) {
+  async function sendVoiceRecording(audio: Blob, durationSeconds: number) {
     setIsVoiceProcessing(true);
     setVoiceNotice("Transcribiendo de forma segura…");
     const form = new FormData();
@@ -206,6 +192,7 @@ function App() {
     if (conversationId) form.append("conversation_id", conversationId);
     form.append("probable_user", "ismael");
     form.append("room_key", selectedRoom || "cocina_salon");
+    form.append("duration_seconds", durationSeconds.toFixed(2));
     const start = performance.now();
     try {
       const result = await apiPostForm<VoiceTurnResult>("/api/voice/turn", form);
@@ -240,6 +227,10 @@ function App() {
     };
     instance.onerror = () => setVoiceNotice("Se ha interrumpido la grabación. Prueba otra vez.");
     instance.onstop = () => {
+      if (recordingTimeout.current !== null) {
+        window.clearTimeout(recordingTimeout.current);
+        recordingTimeout.current = null;
+      }
       recorder.current = null;
       recordingStream.current?.getTracks().forEach((track) => track.stop());
       recordingStream.current = null;
@@ -249,11 +240,22 @@ function App() {
         setVoiceNotice("No he recibido audio. Revisa el permiso de micrófono.");
         return;
       }
-      void sendVoiceRecording(audio);
+      const startedAt = recordingStartedAt.current;
+      recordingStartedAt.current = null;
+      const durationSeconds = startedAt ? Math.max(0.25, (performance.now() - startedAt) / 1000) : status?.voice?.max_seconds || 8;
+      void sendVoiceRecording(audio, durationSeconds);
     };
     instance.start();
+    recordingStartedAt.current = performance.now();
     setIsListening(true);
-    setVoiceNotice(`Escuchando con OpenAI · máximo ${status?.voice?.max_seconds || 20} segundos`);
+    const maxSeconds = status?.voice?.max_seconds || 8;
+    recordingTimeout.current = window.setTimeout(() => {
+      if (instance.state !== "inactive") {
+        setVoiceNotice("He cerrado la escucha para ahorrar datos. Dime una frase corta y vuelve a hablarme.");
+        instance.stop();
+      }
+    }, maxSeconds * 1000);
+    setVoiceNotice(`Te escucho · máximo ${maxSeconds} segundos`);
   }
 
   function startVoice() {
@@ -293,7 +295,7 @@ function App() {
     <section className="command-deck panel-glow">
       <div className="voice-core">
         <div className={`voice-ring ${isListening || isVoiceProcessing ? "listening" : ""}`}><Mic size={34} /></div>
-        <div><span className="eyebrow">INTERFAZ DE VOZ · {apiTranscriptionAvailable ? "OPENAI SEGURO" : "NAVEGADOR LOCAL"}</span><h2>{isVoiceProcessing ? "PROCESANDO" : isListening ? "TE ESCUCHO" : "HABLA CON ALI"}</h2><p>{voiceNotice}</p>{browserVoices.length > 0 && <label className="voice-picker">Voz <select value={selectedVoice} onChange={(event) => setSelectedVoice(event.target.value)}>{browserVoices.map((voice) => <option key={voice.name} value={voice.name}>{voice.name} · {voice.lang}</option>)}</select></label>}</div>
+        <div><span className="eyebrow">INTERFAZ DE VOZ · {apiTranscriptionAvailable ? "OPENAI SEGURO" : "NAVEGADOR LOCAL"}</span><h2>{isVoiceProcessing ? "PROCESANDO" : isListening ? "TE ESCUCHO" : "HABLA CON ALI"}</h2><p>{voiceNotice}</p><span className="voice-identity">VOZ FIJA · ALI</span></div>
         <button
           className="talk-button"
           disabled={isVoiceProcessing}
@@ -329,7 +331,7 @@ function App() {
     <section className="overview-grid">
       <article className="telemetry panel-glow"><span className="eyebrow">ESTADO AMBIENTAL</span><div className="temp-value"><Thermometer /> <strong>—<sup>°C</sup></strong></div><p>Sin sensor térmico conectado</p><div className="telemetry-row"><Wind size={16} /> Aire acondicionado <b>Sin integrar</b></div><div className="telemetry-row"><CloudSun size={16} /> Clima exterior <b>Pendiente</b></div></article>
       <article className="telemetry panel-glow"><span className="eyebrow">SEGURIDAD PERIMETRAL</span><div className="security-number"><ShieldCheck size={30} /><strong>—</strong></div><p>Puertas y ventanas sin sensores</p><div className="telemetry-row"><DoorOpen size={16} /> Puertas <b>Sin datos</b></div><div className="telemetry-row"><BellRing size={16} /> Alertas <b>0</b></div></article>
-      <article className="telemetry panel-glow"><span className="eyebrow">INTELIGENCIA ALI</span><div className="security-number"><BrainCircuit size={30} /><strong>LOCAL</strong></div><p>{users.map((user) => user.display_name).join(" · ") || "Perfiles cargando"}</p><div className="telemetry-row"><Radio size={16} /> Voz <b>{apiTranscriptionAvailable ? "API privada" : voiceRooms.length ? "Punto previsto" : "Prueba web"}</b></div><div className="telemetry-row"><Gauge size={16} /> GPT <b>{usage?.enabled ? "Activo" : "Apagado"}</b></div></article>
+      <article className="telemetry panel-glow"><span className="eyebrow">INTELIGENCIA ALI</span><div className="security-number"><BrainCircuit size={30} /><strong>ALI</strong></div><p>{users.map((user) => user.display_name).join(" · ") || "Perfiles cargando"}</p><div className="telemetry-row"><Radio size={16} /> Voz <b>{apiTtsAvailable ? "Voz fija natural" : apiTranscriptionAvailable ? "API privada" : voiceRooms.length ? "Punto previsto" : "Prueba web"}</b></div><div className="telemetry-row"><Gauge size={16} /> Coste hoy <b>{euro(usage?.daily_spend)}</b></div><div className="telemetry-row"><Gauge size={16} /> Tope mensual <b>{euro(usage?.monthly_limit)}</b></div></article>
     </section>
 
     <section className="home-grid">
