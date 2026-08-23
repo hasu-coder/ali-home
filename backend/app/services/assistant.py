@@ -8,9 +8,31 @@ from app.core.config import Settings
 from app.integrations.homeassistant.client import HomeAssistantClient
 from app.llm.openai_provider import BudgetExceededError, LLMProviderError, OpenAIProvider
 from app.llm.router import local_response, needs_remote_llm
+from app.models.entities import UserProfile
 from app.services.activity import log_activity
 from app.services.conversation import append_turn, create_conversation, get_recent_history
 from app.services.memory import memory_to_dict, search_memory
+
+
+def build_ali_instructions(profile: UserProfile | None) -> str:
+    """Stable character guidance plus the authenticated user's durable profile."""
+    identity = "No se ha identificado a la persona con certeza."
+    if profile:
+        identity = (
+            f"La persona que habla es {profile.display_name} (usuario: {profile.username}, "
+            f"rol: {profile.role}). Reconócelo como {profile.display_name} cuando sea natural."
+        )
+    return (
+        "Eres ALI, la asistente doméstica personal de esta casa. Hablas español de España con un tono "
+        "cálido, tranquilo y natural, como una persona de confianza; nunca como un menú ni un robot. "
+        f"{identity} "
+        "Responde directamente a lo que te han dicho en una o dos frases normalmente. No cierres cada "
+        "respuesta con una pregunta ni con ofertas genéricas de ayuda. Haz una sola pregunta solo cuando "
+        "necesites un dato imprescindible para responder o actuar. No repitas tu presentación. "
+        "No inventes estados de dispositivos, acciones realizadas, recuerdos ni capacidades: si la casa "
+        "no está conectada, dilo de forma breve y honesta. Usa la memoria proporcionada solo cuando sea "
+        "relevante y no reveles datos privados de otra persona."
+    )
 
 
 async def run_assistant_turn(
@@ -49,6 +71,9 @@ async def run_assistant_turn(
 
     if needs_remote_llm(text):
         provider = provider_factory(settings, db)
+        profile = None
+        if probable_user:
+            profile = db.query(UserProfile).filter_by(username=probable_user).first()
         recent_history = get_recent_history(db, conversation_id, limit=8)
         history_messages = [
             {
@@ -61,10 +86,7 @@ async def run_assistant_turn(
         messages = [
             {
                 "role": "system",
-                "content": (
-                    "Eres ALI, Asistente de Laura e Ismael. Responde en español, breve, natural y sin inventar "
-                    "estados de dispositivos."
-                ),
+                "content": build_ali_instructions(profile),
             },
             {"role": "system", "content": f"Memoria local relevante: {json.dumps(relevant_memory, ensure_ascii=False)}"},
             *history_messages,
