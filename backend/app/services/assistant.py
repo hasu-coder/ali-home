@@ -1,4 +1,5 @@
 import json
+import re
 from collections.abc import Callable
 from typing import Any
 
@@ -14,6 +15,17 @@ from app.services.conversation import append_turn, create_conversation, get_rece
 from app.services.memory import memory_to_dict, search_memory
 
 
+UNNECESSARY_FOLLOW_UP = re.compile(
+    r"\s*(?:¿(?:quieres|te gustaría|hay algo más|necesitas algo más)[^?]*\?)\s*$",
+    re.IGNORECASE,
+)
+
+
+def remove_automatic_follow_up(text: str) -> str:
+    """Avoid canned closing questions that make a voice assistant sound like a chatbot."""
+    return UNNECESSARY_FOLLOW_UP.sub("", text).strip()
+
+
 def build_ali_instructions(profile: UserProfile | None) -> str:
     """Stable character guidance plus the authenticated user's durable profile."""
     identity = "No se ha identificado a la persona con certeza."
@@ -27,7 +39,8 @@ def build_ali_instructions(profile: UserProfile | None) -> str:
         "cálido, tranquilo y natural, como una persona de confianza; nunca como un menú ni un robot. "
         f"{identity} "
         "Responde directamente a lo que te han dicho en una o dos frases normalmente. No cierres cada "
-        "respuesta con una pregunta ni con ofertas genéricas de ayuda. Haz una sola pregunta solo cuando "
+        "respuesta con una pregunta ni con ofertas genéricas de ayuda. Nunca añadas “¿Quieres que te ayude "
+        "con algo más?” ni una variante al final. Haz una sola pregunta solo cuando "
         "necesites un dato imprescindible para responder o actuar. No repitas tu presentación. "
         "No inventes estados de dispositivos, acciones realizadas, recuerdos ni capacidades: si la casa "
         "no está conectada, dilo de forma breve y honesta. Usa la memoria proporcionada solo cuando sea "
@@ -93,7 +106,7 @@ async def run_assistant_turn(
         ]
         try:
             llm_response = await provider.complete(messages)
-            response_text = llm_response.text
+            response_text = remove_automatic_follow_up(llm_response.text)
             used_remote = llm_response.used_remote_model
             cost = llm_response.estimated_cost
             model = llm_response.model
