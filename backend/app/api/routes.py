@@ -311,6 +311,14 @@ async def voice_enroll(
         raise HTTPException(status_code=404, detail="unknown_user") from None
     except LocalVoiceUnavailableError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from None
+    except Exception as exc:
+        # Do not turn a local model/decode failure into an opaque HTTP 500.
+        # The raw recording is still discarded and no profile is persisted.
+        db.rollback()
+        raise HTTPException(
+            status_code=503,
+            detail=f"voice_enrollment_unavailable:{exc.__class__.__name__}",
+        ) from None
     log_activity(
         db,
         event_type="voice.enrolled",
