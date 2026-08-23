@@ -42,6 +42,8 @@ type SpeechRecognitionLike = {
   stop: () => void;
 };
 
+type BrowserVoice = { name: string; lang: string; localService: boolean };
+
 declare global {
   interface Window {
     SpeechRecognition?: new () => SpeechRecognitionLike;
@@ -74,6 +76,8 @@ function App() {
   const [isVoiceProcessing, setIsVoiceProcessing] = useState(false);
   const [voiceNotice, setVoiceNotice] = useState("Pulsa y mantén para hablar con ALI");
   const [latency, setLatency] = useState<number | null>(null);
+  const [browserVoices, setBrowserVoices] = useState<BrowserVoice[]>([]);
+  const [selectedVoice, setSelectedVoice] = useState(() => localStorage.getItem("ali-browser-voice") || "");
   const recognition = useRef<SpeechRecognitionLike | null>(null);
   const recorder = useRef<MediaRecorder | null>(null);
   const recordingStream = useRef<MediaStream | null>(null);
@@ -92,6 +96,20 @@ function App() {
   }
 
   useEffect(() => { refresh().catch(console.error); }, []);
+  useEffect(() => {
+    if (!("speechSynthesis" in window)) return;
+    const loadVoices = () => {
+      const spanish = window.speechSynthesis.getVoices()
+        .filter((voice) => voice.lang.toLowerCase().startsWith("es"))
+        .map((voice) => ({ name: voice.name, lang: voice.lang, localService: voice.localService }));
+      setBrowserVoices(spanish);
+      if (!selectedVoice && spanish[0]) setSelectedVoice(spanish[0].name);
+    };
+    loadVoices();
+    window.speechSynthesis.addEventListener("voiceschanged", loadVoices);
+    return () => window.speechSynthesis.removeEventListener("voiceschanged", loadVoices);
+  }, [selectedVoice]);
+  useEffect(() => { if (selectedVoice) localStorage.setItem("ali-browser-voice", selectedVoice); }, [selectedVoice]);
   const selected = rooms.find((room) => room.key === selectedRoom);
   const voiceRooms = useMemo(() => rooms.filter((room) => room.has_voice_point), [rooms]);
   const apiTranscriptionAvailable = Boolean(status?.voice?.transcription_available);
@@ -102,7 +120,10 @@ function App() {
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.lang = "es-ES";
-    utterance.rate = 1.06;
+    const selected = window.speechSynthesis.getVoices().find((voice) => voice.name === selectedVoice);
+    if (selected) utterance.voice = selected;
+    utterance.rate = 1.0;
+    utterance.pitch = 1.0;
     window.speechSynthesis.speak(utterance);
   }
 
@@ -272,7 +293,7 @@ function App() {
     <section className="command-deck panel-glow">
       <div className="voice-core">
         <div className={`voice-ring ${isListening || isVoiceProcessing ? "listening" : ""}`}><Mic size={34} /></div>
-        <div><span className="eyebrow">INTERFAZ DE VOZ · {apiTranscriptionAvailable ? "OPENAI SEGURO" : "NAVEGADOR LOCAL"}</span><h2>{isVoiceProcessing ? "PROCESANDO" : isListening ? "TE ESCUCHO" : "HABLA CON ALI"}</h2><p>{voiceNotice}</p></div>
+        <div><span className="eyebrow">INTERFAZ DE VOZ · {apiTranscriptionAvailable ? "OPENAI SEGURO" : "NAVEGADOR LOCAL"}</span><h2>{isVoiceProcessing ? "PROCESANDO" : isListening ? "TE ESCUCHO" : "HABLA CON ALI"}</h2><p>{voiceNotice}</p>{browserVoices.length > 0 && <label className="voice-picker">Voz <select value={selectedVoice} onChange={(event) => setSelectedVoice(event.target.value)}>{browserVoices.map((voice) => <option key={voice.name} value={voice.name}>{voice.name} · {voice.lang}</option>)}</select></label>}</div>
         <button
           className="talk-button"
           disabled={isVoiceProcessing}
