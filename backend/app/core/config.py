@@ -24,8 +24,8 @@ class Settings(BaseSettings):
     home_assistant_climate_entity_id: str = ""
 
     openai_api_key: str = ""
-    # Everyday conversation is deliberately inexpensive. Harder tasks can be
-    # routed to a second model later without making every house command costly.
+    # Text reasoning is the only normal paid path. House control, STT and speaker
+    # recognition are designed to stay local.
     openai_model: str = "gpt-4o-mini"
     openai_enabled: bool = False
     openai_monthly_limit: float = 5.0
@@ -35,7 +35,13 @@ class Settings(BaseSettings):
     openai_output_cost_per_1m: float = Field(default=0.60, ge=0)
     openai_max_output_tokens: int = Field(default=120, ge=16, le=1024)
 
-    # Voice is intentionally opt-in. The browser never receives the API key.
+    # Current information is opt-in and only invoked when the utterance implies
+    # fresh data (live sport, weather, news, traffic, prices, etc.).
+    openai_live_context_enabled: bool = True
+    openai_live_model: str = "gpt-4o-mini"
+    openai_web_search_cost_per_call: float = Field(default=0.01, ge=0)
+
+    # Paid cloud voice remains an optional fallback. It is NOT the default path.
     openai_voice_enabled: bool = False
     openai_transcription_model: str = "gpt-4o-mini-transcribe"
     openai_transcription_cost_per_minute: float = Field(default=0.003, ge=0)
@@ -44,6 +50,17 @@ class Settings(BaseSettings):
     openai_tts_voice: str = "coral"
     openai_tts_speed: float = Field(default=1.2, ge=0.25, le=4.0)
     openai_tts_estimated_cost_per_minute: float = Field(default=0.015, ge=0)
+
+    # Local voice: faster-whisper transcribes for €0/API call and SpeechBrain
+    # identifies enrolled residents locally. Models are cached in ali_data.
+    ali_local_stt_enabled: bool = True
+    ali_local_stt_model: str = "small"
+    ali_local_stt_device: str = "cpu"
+    ali_local_stt_compute_type: str = "int8"
+    ali_speaker_id_enabled: bool = True
+    ali_speaker_model: str = "speechbrain/spkrec-ecapa-voxceleb"
+    ali_speaker_threshold: float = Field(default=0.62, ge=-1.0, le=1.0)
+    ali_voice_model_cache: str = "/app/data/models"
     ali_voice_max_bytes: int = Field(default=4_000_000, ge=100_000, le=25_000_000)
     ali_voice_max_seconds: int = Field(default=8, ge=1, le=120)
     ali_voice_max_reply_chars: int = Field(default=180, ge=50, le=4096)
