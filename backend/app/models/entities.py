@@ -50,6 +50,20 @@ class UserProfile(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class VoiceProfile(Base):
+    """Local speaker embedding. Raw enrolment audio is never retained."""
+
+    __tablename__ = "voice_profiles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    username: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    embedding: Mapped[str] = mapped_column(Text)
+    sample_count: Mapped[int] = mapped_column(Integer, default=1)
+    model: Mapped[str] = mapped_column(String(160))
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class Room(Base):
     __tablename__ = "rooms"
 
