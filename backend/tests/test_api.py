@@ -99,6 +99,11 @@ def test_local_router_keeps_known_home_commands_off_openai():
     assert all(needs_remote_llm(text) is False for text in known_local)
 
 
+def test_short_natural_language_requests_can_use_ali():
+    assert needs_remote_llm("¿Qué puedes hacer?") is True
+    assert needs_remote_llm("hola") is True
+
+
 def test_conversation_session_is_created_and_reused(monkeypatch):
     FakeHomeAssistantClient.calls = []
     FakeHomeAssistantClient.result = FakeHAResult(success=True, verified=True, state="on")
