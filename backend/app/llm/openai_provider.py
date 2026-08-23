@@ -117,7 +117,7 @@ class OpenAIProvider(LLMProvider):
         particular Python SDK representation of the web-search tool.
         """
         if not self.settings.openai_enabled:
-            return LLMResponse(text="Estoy funcionando en modo local.", provider="local_disabled", model="none")
+            raise LLMProviderError("live_context_requires_openai")
         if not self.settings.openai_live_context_enabled:
             raise LLMProviderError("live_context_disabled")
         if not self.settings.openai_api_key:
