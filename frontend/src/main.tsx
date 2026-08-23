@@ -226,7 +226,7 @@ function App() {
     try {
       instance.start();
       setIsListening(true);
-      setVoiceNotice("Escuchando con el reconocimiento del navegador…");
+      setVoiceNotice("Escuchando rápido con el navegador · sin créditos de OpenAI…");
       return true;
     } catch (error) {
       console.error(error);
@@ -315,16 +315,15 @@ function App() {
 
   function startVoice() {
     if (isListening || isVoiceProcessing) return;
-    // Prefer ALI's own backend when local STT exists: this is the path that also
-    // performs automatic speaker identification. Browser recognition is fallback.
+    // The browser recognizer is immediate and does not consume OpenAI credits.
+    // The slower local-STT route remains only as a compatibility fallback.
+    if (startBrowserVoice()) return;
     if (apiTranscriptionAvailable) {
       startApiVoice().catch((error) => {
         console.error(error);
-        if (!startBrowserVoice()) setVoiceNotice("No he podido abrir ningún modo de escucha.");
+        setVoiceNotice("No he podido abrir el micrófono de respaldo. Prueba Chrome o Safari.");
       });
-      return;
     }
-    startBrowserVoice();
   }
 
   function stopVoice() {
