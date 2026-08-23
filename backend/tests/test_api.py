@@ -364,3 +364,96 @@ def test_persistence_logic_uses_database_rows_not_in_memory_state():
         assert activity_count >= 1
     finally:
         db.close()
+
+
+def test_voice_status_is_public_but_never_contains_the_api_key():
+    settings = get_settings()
+    original_key = settings.openai_api_key
+    original_enabled = settings.openai_voice_enabled
+    settings.openai_api_key = "test-secret-must-not-leak"
+    settings.openai_voice_enabled = True
+    try:
+        body = client.get("/api/status").json()
+        assert body["voice"]["transcription_available"] is True
+        assert "test-secret-must-not-leak" not in str(body)
+    finally:
+        settings.openai_api_key = original_key
+        settings.openai_voice_enabled = original_enabled
+
+
+def test_voice_turn_is_unavailable_until_explicitly_enabled():
+    settings = get_settings()
+    original = settings.openai_voice_enabled
+    settings.openai_voice_enabled = False
+    try:
+        response = client.post(
+            "/api/voice/turn",
+            files={"file": ("voice.webm", b"short-audio", "audio/webm")},
+        )
+        assert response.status_code == 503
+        assert response.json()["detail"] == "voice_transcription_unavailable"
+    finally:
+        settings.openai_voice_enabled = original
+
+
+def test_voice_turn_rejects_unexpected_file_types():
+    response = client.post(
+        "/api/voice/turn",
+        files={"file": ("voice.txt", b"not-audio", "text/plain")},
+    )
+    assert response.status_code == 415
+    assert response.json()["detail"] == "unsupported_voice_format"
+
+
+def test_voice_turn_uses_the_same_local_command_path_and_withholds_transcript(monkeypatch):
+    class FakeVoiceProvider:
+        def __init__(self, settings, db):
+            pass
+
+        async def transcribe_audio(self, *, filename, content_type, audio_bytes):
+            assert filename == "voice.webm"
+            assert content_type == "audio/webm"
+            assert audio_bytes == b"short-audio"
+            return "ALI, enciende la cocina", 0.001
+
+    settings = get_settings()
+    original = settings.openai_voice_enabled
+    settings.openai_voice_enabled = True
+    FakeHomeAssistantClient.calls = []
+    FakeHomeAssistantClient.result = FakeHAResult(success=True, verified=True, state="on")
+    monkeypatch.setattr("app.api.routes.OpenAIProvider", FakeVoiceProvider)
+    monkeypatch.setattr("app.api.routes.HomeAssistantClient", FakeHomeAssistantClient)
+    try:
+        response = client.post(
+            "/api/voice/turn",
+            files={"file": ("voice.webm", b"short-audio", "audio/webm")},
+            data={"probable_user": "ismael", "room_key": "cocina_salon"},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["transcript"] == "ALI, enciende la cocina"
+        assert body["response"] == "Listo."
+        assert body["used_remote_llm"] is False
+        assert body["transcription_estimated_cost"] == 0.001
+        assert FakeHomeAssistantClient.calls[0]["entity_id"] == "light.cocina_salon"
+        db = SessionLocal()
+        try:
+            voice_log = db.query(ActivityLog).filter_by(event_type="voice.transcribed").order_by(ActivityLog.id.desc()).first()
+            assert voice_log is not None
+            assert "enciende la cocina" not in voice_log.details
+        finally:
+            db.close()
+    finally:
+        settings.openai_voice_enabled = original
+
+
+def test_openai_tts_stays_opt_in():
+    settings = get_settings()
+    original = settings.openai_tts_enabled
+    settings.openai_tts_enabled = False
+    try:
+        response = client.post("/api/voice/speech", json={"text": "Hola"})
+        assert response.status_code == 503
+        assert response.json()["detail"] == "voice_synthesis_unavailable"
+    finally:
+        settings.openai_tts_enabled = original
