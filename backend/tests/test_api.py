@@ -6,6 +6,7 @@ from app.llm.provider import LLMResponse
 from app.llm.openai_provider import BudgetExceededError, OpenAIProvider
 from app.llm.router import needs_remote_llm
 from app.main import app
+from app.services.assistant import remove_automatic_follow_up
 from app.models.entities import ActivityLog, MemoryItem, OpenAIUsage
 
 
@@ -102,6 +103,11 @@ def test_local_router_keeps_known_home_commands_off_openai():
 def test_short_natural_language_requests_can_use_ali():
     assert needs_remote_llm("¿Qué puedes hacer?") is True
     assert needs_remote_llm("hola") is True
+
+
+def test_ali_removes_canned_closing_questions():
+    assert remove_automatic_follow_up("Eres Ismael. ¿Quieres que te ayude con algo más?") == "Eres Ismael."
+    assert remove_automatic_follow_up("Necesito saber la habitación. ¿En cuál estás?") == "Necesito saber la habitación. ¿En cuál estás?"
 
 
 def test_conversation_session_is_created_and_reused(monkeypatch):
